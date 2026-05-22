@@ -353,7 +353,7 @@ Example `.env`:
 SPLUNK_HOST=localhost
 SPLUNK_WEB_PORT=8000
 SPLUNK_API_PORT=8089
-SPLUNK_USERNAME=admin
+SPLUNK_USERNAME=elena
 SPLUNK_PASSWORD=changeme
 SPLUNK_INDEX=security
 SPLUNK_VERIFY_SSL=false
@@ -764,17 +764,17 @@ generate synthetic logs
 
 ### Phase 1: Repo skeleton
 
-- [ ] Create repository structure
-- [ ] Add synthetic log generator
-- [ ] Add sample detections
-- [ ] Add README
+- [x] Create repository structure
+- [x] Add synthetic log generator
+- [x] Add sample detections
+- [x] Add README
 - [ ] Add `.env.example`
 
 ### Phase 2: Splunk ingestion and search
 
-- [ ] Create `security` index
-- [ ] Ingest synthetic JSON logs
-- [ ] Confirm SPL works in Splunk Web
+- [x] Create `security` index
+- [x] Ingest synthetic JSON logs
+- [x] Confirm SPL works in Splunk Web
 - [ ] Implement Python Splunk client
 - [ ] Return result rows to the agent
 
