@@ -1,0 +1,305 @@
+{
+  "baseline_result_count": 122,
+  "baseline_spl": "index=rulepilot_demo event_type=process command_line=\"*powershell*\" OR command_line=\"*curl*\" OR command_line=\"*wget*\" OR command_line=\"*base64*\"\n| table _time, host, user, process, parent_process, command_line\n| sort - _time",
+  "burst_diagnostic_name": "suspicious_command_clusters",
+  "diagnosis_text": "Refine suspicious-process detection",
+  "diagnostic_results": {
+    "count_by_command_pattern": {
+      "result_count": 6,
+      "rows": [
+        {
+          "count": "140",
+          "pattern": "other"
+        },
+        {
+          "count": "4",
+          "pattern": "curl_pipe_shell"
+        },
+        {
+          "count": "4",
+          "pattern": "powershell_encoded"
+        },
+        {
+          "count": "3",
+          "pattern": "reverse_shell_devtcp"
+        },
+        {
+          "count": "2",
+          "pattern": "base64_decode"
+        },
+        {
+          "count": "2",
+          "pattern": "wget_pipe_shell"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=process\n| eval pattern=case(\n    like(lower(command_line), \"%-enc %\") OR like(lower(command_line), \"%encodedcommand%\"), \"powershell_encoded\",\n    like(lower(command_line), \"%curl%sh%\") OR like(lower(command_line), \"%curl%bash%\"), \"curl_pipe_shell\",\n    like(lower(command_line), \"%wget%sh%\") OR like(lower(command_line), \"%wget%bash%\"), \"wget_pipe_shell\",\n    like(lower(command_line), \"%base64%-d%\") OR like(lower(command_line), \"%b64decode%\"), \"base64_decode\",\n    like(command_line, \"%/dev/tcp/%\"), \"reverse_shell_devtcp\",\n    1=1, \"other\")\n| stats count by pattern\n| sort - count"
+    },
+    "count_by_parent_process": {
+      "result_count": 10,
+      "rows": [
+        {
+          "count": "92",
+          "parent_process": "bash"
+        },
+        {
+          "count": "22",
+          "parent_process": "cmd.exe"
+        },
+        {
+          "count": "13",
+          "parent_process": "python3"
+        },
+        {
+          "count": "11",
+          "parent_process": "explorer.exe"
+        },
+        {
+          "count": "4",
+          "parent_process": "sshd"
+        },
+        {
+          "count": "4",
+          "parent_process": "svchost.exe"
+        },
+        {
+          "count": "3",
+          "parent_process": "httpd"
+        },
+        {
+          "count": "3",
+          "parent_process": "outlook.exe"
+        },
+        {
+          "count": "2",
+          "parent_process": "cron"
+        },
+        {
+          "count": "1",
+          "parent_process": "winword.exe"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=process\n| stats count by parent_process\n| sort - count\n| head 10"
+    },
+    "count_by_process": {
+      "result_count": 8,
+      "rows": [
+        {
+          "count": "29",
+          "process": "powershell.exe"
+        },
+        {
+          "count": "28",
+          "process": "curl"
+        },
+        {
+          "count": "23",
+          "process": "base64"
+        },
+        {
+          "count": "22",
+          "process": "wget"
+        },
+        {
+          "count": "16",
+          "process": "openssl"
+        },
+        {
+          "count": "16",
+          "process": "python3"
+        },
+        {
+          "count": "12",
+          "process": "curl.exe"
+        },
+        {
+          "count": "9",
+          "process": "bash"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=process\n| stats count by process\n| sort - count\n| head 10"
+    },
+    "count_by_user": {
+      "result_count": 7,
+      "rows": [
+        {
+          "count": "37",
+          "user": "dave"
+        },
+        {
+          "count": "27",
+          "user": "carol"
+        },
+        {
+          "count": "26",
+          "user": "bob"
+        },
+        {
+          "count": "25",
+          "user": "alice"
+        },
+        {
+          "count": "18",
+          "user": "svc_deploy"
+        },
+        {
+          "count": "13",
+          "user": "svc_ci"
+        },
+        {
+          "count": "9",
+          "user": "svc_backup"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=process\n| stats count by user\n| sort - count\n| head 10"
+    },
+    "suspicious_command_clusters": {
+      "result_count": 16,
+      "rows": [
+        {
+          "host": "rulepilot-demo",
+          "parents": [
+            "cron",
+            "httpd",
+            "outlook.exe",
+            "sshd"
+          ],
+          "processes": [
+            "bash",
+            "powershell.exe"
+          ],
+          "suspicious_count": "6",
+          "user": "carol"
+        },
+        {
+          "host": "rulepilot-demo",
+          "parents": [
+            "httpd",
+            "winword.exe"
+          ],
+          "processes": [
+            "bash",
+            "powershell.exe"
+          ],
+          "suspicious_count": "3",
+          "user": "alice"
+        },
+        {
+          "host": "rulepilot-demo",
+          "parents": [
+            "cron",
+            "sshd"
+          ],
+          "processes": "bash",
+          "suspicious_count": "2",
+          "user": "bob"
+        },
+        {
+          "host": "host-app-01",
+          "parents": "sshd",
+          "processes": "bash",
+          "suspicious_count": "2",
+          "user": "carol"
+        },
+        {
+          "host": "rulepilot-demo",
+          "parents": "outlook.exe",
+          "processes": "powershell.exe",
+          "suspicious_count": "2",
+          "user": "dave"
+        },
+        {
+          "host": "host-dev-laptop-07",
+          "parents": "httpd",
+          "processes": "bash",
+          "suspicious_count": "1",
+          "user": "alice"
+        },
+        {
+          "host": "host-web-01",
+          "parents": "winword.exe",
+          "processes": "powershell.exe",
+          "suspicious_count": "1",
+          "user": "alice"
+        },
+        {
+          "host": "host-web-02",
+          "parents": "httpd",
+          "processes": "bash",
+          "suspicious_count": "1",
+          "user": "alice"
+        },
+        {
+          "host": "host-dev-laptop-04",
+          "parents": "cron",
+          "processes": "bash",
+          "suspicious_count": "1",
+          "user": "bob"
+        },
+        {
+          "host": "host-dev-laptop-07",
+          "parents": "sshd",
+          "processes": "bash",
+          "suspicious_count": "1",
+          "user": "bob"
+        },
+        {
+          "host": "host-db-01",
+          "parents": "sshd",
+          "processes": "bash",
+          "suspicious_count": "1",
+          "user": "carol"
+        },
+        {
+          "host": "host-dev-laptop-04",
+          "parents": "httpd",
+          "processes": "bash",
+          "suspicious_count": "1",
+          "user": "carol"
+        },
+        {
+          "host": "host-web-01",
+          "parents": "cron",
+          "processes": "bash",
+          "suspicious_count": "1",
+          "user": "carol"
+        },
+        {
+          "host": "host-web-02",
+          "parents": "outlook.exe",
+          "processes": "powershell.exe",
+          "suspicious_count": "1",
+          "user": "carol"
+        },
+        {
+          "host": "host-app-01",
+          "parents": "outlook.exe",
+          "processes": "powershell.exe",
+          "suspicious_count": "1",
+          "user": "dave"
+        },
+        {
+          "host": "host-web-02",
+          "parents": "outlook.exe",
+          "processes": "powershell.exe",
+          "suspicious_count": "1",
+          "user": "dave"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=process\n| eval is_encoded=if(like(lower(command_line), \"%-enc %\") OR like(lower(command_line), \"%encodedcommand%\"), 1, 0)\n| eval is_pipe_shell=if(like(lower(command_line), \"%curl%sh%\") OR like(lower(command_line), \"%curl%bash%\") OR like(lower(command_line), \"%wget%sh%\") OR like(lower(command_line), \"%wget%bash%\"), 1, 0)\n| eval is_revshell=if(like(command_line, \"%/dev/tcp/%\"), 1, 0)\n| where is_encoded=1 OR is_pipe_shell=1 OR is_revshell=1\n| stats count as suspicious_count values(process) as processes values(parent_process) as parents by user host\n| sort - suspicious_count\n| head 20"
+    }
+  },
+  "expected_effect": "Reduce false positives by 50%",
+  "metric_fields": [
+    "process",
+    "user",
+    "parent_process"
+  ],
+  "refined_result_count": 87,
+  "refined_spl": "index=rulepilot_demo event_type=process command_line=\"*powershell*\" OR command_line=\"*curl*\" OR command_line=\"*wget*\" OR command_line=\"*base64*\" NOT parent_process IN (cron, httpd, outlook.exe, sshd) NOT process IN (bash, powershell.exe) NOT user IN ('svc_deploy')",
+  "refined_spl_output_path": "/Users/elena/Desktop/rule-pilot/detections/suspicious_command_refined.spl",
+  "refinement_rationale": "Rule Tuning Refine the detection to reduce noise by excluding certain processes and users from triggering.",
+  "refinement_strategy": "Rule Tuning",
+  "risk": "Low",
+  "scenario": "suspicious_command",
+  "scenario_title": "Suspicious Command Execution"
+}

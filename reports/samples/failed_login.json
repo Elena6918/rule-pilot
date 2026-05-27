@@ -1,0 +1,177 @@
+{
+  "baseline_result_count": 113,
+  "baseline_spl": "index=rulepilot_demo sourcetype=auth action=login\n| stats count by user, src_ip, status\n| sort - count",
+  "burst_diagnostic_name": "suspicious_failed_login_bursts",
+  "diagnosis_text": "Failed Login Burst Refinement",
+  "diagnostic_results": {
+    "count_by_reason": {
+      "result_count": 6,
+      "rows": [
+        {
+          "count": "28",
+          "reason": "mistyped_password"
+        },
+        {
+          "count": "27",
+          "reason": "expired_password"
+        },
+        {
+          "count": "20",
+          "reason": "bad_password"
+        },
+        {
+          "count": "11",
+          "reason": "service_account_activity"
+        },
+        {
+          "count": "8",
+          "reason": "password_spray_attempt"
+        },
+        {
+          "count": "3",
+          "reason": "low_volume_failed_login"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=auth action=login (status=failed OR status=failure)\n| stats count by reason\n| sort - count"
+    },
+    "count_by_src_ip": {
+      "result_count": 10,
+      "rows": [
+        {
+          "count": "16",
+          "src_ip": "45.83.12.9"
+        },
+        {
+          "count": "12",
+          "src_ip": "10.0.0.8"
+        },
+        {
+          "count": "11",
+          "src_ip": "10.0.1.12"
+        },
+        {
+          "count": "11",
+          "src_ip": "185.199.110.153"
+        },
+        {
+          "count": "11",
+          "src_ip": "91.220.101.44"
+        },
+        {
+          "count": "10",
+          "src_ip": "10.0.0.5"
+        },
+        {
+          "count": "9",
+          "src_ip": "192.168.1.19"
+        },
+        {
+          "count": "8",
+          "src_ip": "192.168.1.14"
+        },
+        {
+          "count": "5",
+          "src_ip": "203.0.113.77"
+        },
+        {
+          "count": "4",
+          "src_ip": "10.0.2.20"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=auth action=login (status=failed OR status=failure)\n| stats count by src_ip\n| sort - count\n| head 10"
+    },
+    "count_by_status": {
+      "result_count": 2,
+      "rows": [
+        {
+          "count": "390",
+          "status": "success"
+        },
+        {
+          "count": "97",
+          "status": "failure"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=auth action=login\n| stats count by status\n| sort - count"
+    },
+    "count_by_user": {
+      "result_count": 10,
+      "rows": [
+        {
+          "count": "16",
+          "user": "svc_backup"
+        },
+        {
+          "count": "16",
+          "user": "svc_ci"
+        },
+        {
+          "count": "14",
+          "user": "alice"
+        },
+        {
+          "count": "10",
+          "user": "bob"
+        },
+        {
+          "count": "10",
+          "user": "carol"
+        },
+        {
+          "count": "9",
+          "user": "frank"
+        },
+        {
+          "count": "7",
+          "user": "erin"
+        },
+        {
+          "count": "7",
+          "user": "heidi"
+        },
+        {
+          "count": "4",
+          "user": "dave"
+        },
+        {
+          "count": "4",
+          "user": "grace"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=auth action=login (status=failed OR status=failure)\n| stats count by user\n| sort - count\n| head 10"
+    },
+    "suspicious_failed_login_bursts": {
+      "result_count": 1,
+      "rows": [
+        {
+          "_time": "2026-05-27T15:50:00.000-04:00",
+          "apps": [
+            "okta",
+            "splunk",
+            "ssh",
+            "webmail"
+          ],
+          "failed_count": "5",
+          "reasons": "password_spray_attempt",
+          "src_ip": "45.83.12.9",
+          "user": "alice"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=auth action=login (status=failed OR status=failure)\n| bucket _time span=10m\n| stats count as failed_count values(reason) as reasons values(app) as apps by _time src_ip user\n| where failed_count >= 5\n| sort - failed_count\n| head 20"
+    }
+  },
+  "expected_effect": "Reduce noise in failed login detection by filtering out non-bursty logins.",
+  "metric_fields": [
+    "reason",
+    "user",
+    "src_ip"
+  ],
+  "refined_result_count": 113,
+  "refined_spl": "index=rulepilot_demo sourcetype=auth action=login | stats count by user, src_ip, status | sort - count > 3",
+  "refined_spl_output_path": "/Users/elena/Desktop/rule-pilot/detections/failed_login_refined.spl",
+  "refinement_rationale": "burst_thresholding Apply burst thresholding to filter out isolated typos and routine service-account churn while preserving suspicious burst behavior.",
+  "refinement_strategy": "burst_thresholding",
+  "risk": "Moderate",
+  "scenario": "failed_login",
+  "scenario_title": "Failed Login Burst Refinement"
+}

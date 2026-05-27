@@ -1,0 +1,3 @@
+index={index} event_type=process command_line="*powershell*" OR command_line="*curl*" OR command_line="*wget*" OR command_line="*base64*"
+| table _time, host, user, process, parent_process, command_line
+| sort - _time

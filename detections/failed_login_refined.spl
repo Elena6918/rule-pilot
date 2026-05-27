@@ -1,10 +1,1 @@
-index=security sourcetype=auth action=login
-| stats
-    count(eval(status="failure")) as failures
-    count(eval(status="success")) as successes
-    min(_time) as first_seen
-    max(_time) as last_seen
-    by user, src_ip
-| where failures >= 5 AND successes >= 1
-| convert ctime(first_seen) ctime(last_seen)
-| sort - failures
+index=rulepilot_demo sourcetype=auth action=login | stats count by user, src_ip, status | sort - count > 3

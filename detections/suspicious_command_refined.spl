@@ -1,0 +1,1 @@
+index=rulepilot_demo event_type=process command_line="*powershell*" OR command_line="*curl*" OR command_line="*wget*" OR command_line="*base64*" NOT parent_process IN (cron, httpd, outlook.exe, sshd) NOT process IN (bash, powershell.exe) NOT user IN ('svc_deploy')
