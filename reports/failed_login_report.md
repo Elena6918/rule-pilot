@@ -23,7 +23,10 @@ index=rulepilot_demo sourcetype=auth action=login
 ## Refined Rule
 
 ```spl
-index=rulepilot_demo sourcetype=auth action=login | stats count by user, src_ip, status | sort - count > 3
+search index=rulepilot_demo sourcetype=auth action=login status=failure user!="svc_*"
+| bucket _time span=10m
+| stats count as failed_count by _time, user, src_ip
+| where failed_count >= 5
 ```
 
 ## Before/After Metrics
@@ -31,19 +34,19 @@ index=rulepilot_demo sourcetype=auth action=login | stats count by user, src_ip,
 | Metric | Value |
 | --- | --- |
 | Baseline result rows | 113 |
-| Refined result rows | 113 |
-| Absolute reduction | 0 |
-| Percent reduction | 0.0% |
+| Refined result rows | 1 |
+| Absolute reduction | 112 |
+| Percent reduction | 99.1% |
 
 ## Analyst Interpretation
 
-Failed Login Burst Refinement
+The baseline matches too many events, including isolated typos and service account activity. The goal is to reduce noise while preserving suspicious burst behavior.
 
-burst_thresholding Apply burst thresholding to filter out isolated typos and routine service-account churn while preserving suspicious burst behavior.
+Filter out service accounts, aggregate by time window, and filter for repeated bursts of failed logins. This refinement filters out service accounts, time-buckets the events, aggregates per user+src_ip, and only surfaces repeated bursts (>=5 failures in 10 minutes).
 
-**Expected effect:** Reduce noise in failed login detection by filtering out non-bursty logins.
+**Expected effect:** The result count will be significantly reduced while still preserving suspicious burst behavior.
 
-**Risk:** Moderate
+**Risk:** There is a slight risk of missing very short-lived bursts, but this should be minimal given the 10-minute window.
 
 ## Caveats
 

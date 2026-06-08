@@ -33,6 +33,8 @@ class Scenario:
     diagnostic_searches: dict[str, str] | None = None
     metric_fields: list[str] = field(default_factory=list)
     burst_diagnostic_name: str | None = None
+    preservation_check_spl: str | None = None
+    preservation_key_fields: list[str] = field(default_factory=list)
 
 
 AUTH_FIELDS = [
@@ -105,6 +107,15 @@ def failed_login_scenario(index: str) -> Scenario:
         ),
     }
 
+    preservation_spl = (
+        f"search index={index} event_type=auth action=login "
+        "(status=failed OR status=failure)\n"
+        "| bucket _time span=10m\n"
+        "| stats count as failed_count by _time, user, src_ip\n"
+        "| where failed_count >= 5\n"
+        "| stats values(_time) as windows by user, src_ip"
+    )
+
     return Scenario(
         key="failed_login",
         title="Failed Login Burst Refinement",
@@ -115,8 +126,8 @@ def failed_login_scenario(index: str) -> Scenario:
             "and routine service-account churn."
         ),
         must_preserve=(
-            "Suspicious burst behavior: repeated failed logins from the same "
-            "user/source-IP pair within a short window."
+            "Suspicious burst behavior: repeated failed logins (>=5 in 10 minutes) "
+            "from the same user/source-IP pair."
         ),
         available_fields=AUTH_FIELDS,
         refined_spl_output_path=str(
@@ -125,6 +136,8 @@ def failed_login_scenario(index: str) -> Scenario:
         diagnostic_searches=diagnostics,
         metric_fields=["reason", "user", "src_ip"],
         burst_diagnostic_name="suspicious_failed_login_bursts",
+        preservation_check_spl=preservation_spl,
+        preservation_key_fields=["user", "src_ip"],
     )
 
 
@@ -184,6 +197,25 @@ def suspicious_command_scenario(index: str) -> Scenario:
         ),
     }
 
+    # Preservation set: events that BOTH match the baseline's keyword filter
+    # (so the refined rule could plausibly catch them — coverage expansion
+    # is out of scope) AND look genuinely suspicious. Pure /dev/tcp/ reverse
+    # shells are deliberately excluded because the baseline doesn't cover
+    # them; refining a rule cannot add coverage.
+    preservation_spl = (
+        f"search index={index} event_type=process "
+        "(command_line=\"*powershell*\" OR command_line=\"*curl*\" "
+        "OR command_line=\"*wget*\" OR command_line=\"*base64*\")\n"
+        "| eval is_encoded=if(like(lower(command_line), \"%-enc %\") "
+        "OR like(lower(command_line), \"%encodedcommand%\"), 1, 0)\n"
+        "| eval is_pipe_shell=if(like(lower(command_line), \"%curl%sh%\") "
+        "OR like(lower(command_line), \"%curl%bash%\") "
+        "OR like(lower(command_line), \"%wget%sh%\") "
+        "OR like(lower(command_line), \"%wget%bash%\"), 1, 0)\n"
+        "| where is_encoded=1 OR is_pipe_shell=1\n"
+        "| stats count by user, host"
+    )
+
     return Scenario(
         key="suspicious_command",
         title="Suspicious Command Execution",
@@ -206,6 +238,8 @@ def suspicious_command_scenario(index: str) -> Scenario:
         diagnostic_searches=diagnostics,
         metric_fields=["process", "user", "parent_process"],
         burst_diagnostic_name="suspicious_command_clusters",
+        preservation_check_spl=preservation_spl,
+        preservation_key_fields=["user", "host"],
     )
 
 

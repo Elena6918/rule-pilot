@@ -2,7 +2,7 @@
   "baseline_result_count": 113,
   "baseline_spl": "index=rulepilot_demo sourcetype=auth action=login\n| stats count by user, src_ip, status\n| sort - count",
   "burst_diagnostic_name": "suspicious_failed_login_bursts",
-  "diagnosis_text": "Failed Login Burst Refinement",
+  "diagnosis_text": "The baseline matches too many events, including isolated typos and service account activity. The goal is to reduce noise while preserving suspicious burst behavior.",
   "diagnostic_results": {
     "count_by_reason": {
       "result_count": 6,
@@ -144,7 +144,7 @@
       "result_count": 1,
       "rows": [
         {
-          "_time": "2026-05-27T15:50:00.000-04:00",
+          "_time": "2026-05-27T19:50:00.000+00:00",
           "apps": [
             "okta",
             "splunk",
@@ -160,18 +160,56 @@
       "spl": "search index=rulepilot_demo event_type=auth action=login (status=failed OR status=failure)\n| bucket _time span=10m\n| stats count as failed_count values(reason) as reasons values(app) as apps by _time src_ip user\n| where failed_count >= 5\n| sort - failed_count\n| head 20"
     }
   },
-  "expected_effect": "Reduce noise in failed login detection by filtering out non-bursty logins.",
+  "expected_effect": "The result count will be significantly reduced while still preserving suspicious burst behavior.",
+  "iterations": [
+    {
+      "attempt": 1,
+      "candidate_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
+      "feedback": "Candidate reduced rows by 99.1% (113 \u2192 1). Preserved 100.0% of must-catch entities.",
+      "preservation_pct": 100.0,
+      "refined_result_count": 1,
+      "verdict": "accepted"
+    }
+  ],
   "metric_fields": [
     "reason",
     "user",
     "src_ip"
   ],
-  "refined_result_count": 113,
-  "refined_spl": "index=rulepilot_demo sourcetype=auth action=login | stats count by user, src_ip, status | sort - count > 3",
+  "must_preserve_total": 1,
+  "preservation_pct": 100.0,
+  "refined_result_count": 1,
+  "refined_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
   "refined_spl_output_path": "/Users/elena/Desktop/rule-pilot/detections/failed_login_refined.spl",
-  "refinement_rationale": "burst_thresholding Apply burst thresholding to filter out isolated typos and routine service-account churn while preserving suspicious burst behavior.",
-  "refinement_strategy": "burst_thresholding",
-  "risk": "Moderate",
+  "refinement_rationale": "Filter out service accounts, aggregate by time window, and filter for repeated bursts of failed logins. This refinement filters out service accounts, time-buckets the events, aggregates per user+src_ip, and only surfaces repeated bursts (>=5 failures in 10 minutes).",
+  "refinement_strategy": "Filter out service accounts, aggregate by time window, and filter for repeated bursts of failed logins.",
+  "risk": "There is a slight risk of missing very short-lived bursts, but this should be minimal given the 10-minute window.",
   "scenario": "failed_login",
-  "scenario_title": "Failed Login Burst Refinement"
+  "scenario_title": "Failed Login Burst Refinement",
+  "signals": {
+    "insights": [
+      "Baseline matches 113 result rows.",
+      "Top reason `mistyped_password` accounts for 28.9% of matching events.",
+      "Top 3 reason values cover 77.3% of matching events (highly concentrated).",
+      "Top user `svc_backup` accounts for 16.5% of matching events.",
+      "Service accounts (prefix `svc_`) contribute 33.0% of matching events \u2014 likely benign noise to exclude.",
+      "Top src_ip `45.83.12.9` accounts for 16.5% of matching events.",
+      "1 suspicious burst/cluster group(s) detected via `suspicious_failed_login_bursts`."
+    ],
+    "raw": {
+      "baseline_count": 113,
+      "burst_diagnostic_name": "suspicious_failed_login_bursts",
+      "burst_groups": 1,
+      "service_account_share_pct": 33.0,
+      "top3_reason_share_pct": 77.3,
+      "top3_src_ip_share_pct": 40.2,
+      "top3_user_share_pct": 47.4,
+      "top_reason_share_pct": 28.9,
+      "top_reason_value": "mistyped_password",
+      "top_src_ip_share_pct": 16.5,
+      "top_src_ip_value": "45.83.12.9",
+      "top_user_share_pct": 16.5,
+      "top_user_value": "svc_backup"
+    }
+  }
 }

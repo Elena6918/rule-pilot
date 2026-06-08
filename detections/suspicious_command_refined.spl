@@ -1,1 +1,5 @@
-index=rulepilot_demo event_type=process command_line="*powershell*" OR command_line="*curl*" OR command_line="*wget*" OR command_line="*base64*" NOT parent_process IN (cron, httpd, outlook.exe, sshd) NOT process IN (bash, powershell.exe) NOT user IN ('svc_deploy')
+search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) AND NOT (user STARTSWITH "svc_")
+| bucket _time span=10m
+| stats count as suspicious_count by user, process, parent_process, command_line
+| where suspicious_count >= 5
+| sort - suspicious_count

@@ -1,8 +1,8 @@
 # RulePilot
 
-RulePilot is an analyst-in-the-loop agent for tuning Splunk detection rules.
+RulePilot is an analyst-in-the-loop agent that **reduces false positives in noisy Splunk detection rules without dropping the real suspicious events analysts care about.**
 
-It runs a baseline SPL search against Splunk data, plans diagnostic searches that explain *why* the rule is noisy, asks an LLM to propose a refined SPL, validates and runs the refinement, and reports before/after evidence — all behind a Streamlit UI with one tab per scenario.
+It runs a baseline SPL search against Splunk data, plans diagnostic searches that explain *why* the rule is noisy, asks an LLM to propose a refined SPL, validates the refinement against a "must-preserve" signal set, and iterates if the candidate either fails to reduce noise OR drops too many of the events the analyst marked as critical — all behind a Streamlit UI with one tab per scenario.
 
 ---
 
@@ -10,7 +10,9 @@ It runs a baseline SPL search against Splunk data, plans diagnostic searches tha
 
 **Project name:** RulePilot
 **Hackathon track:** Security
-**Core idea:** Use an AI-assisted workflow to help SOC analysts tune Splunk detections with evidence.
+**Core idea:** Help SOC analysts cut alert volume on noisy detections without losing the signal they actually care about.
+
+False positives are the dominant SOC pain point — analysts drown in alerts before missed detections become visible. RulePilot's framing is deliberately narrow: it is a **false-positive reducer** with a built-in preservation check, not a general detection-engineering autopilot. Coverage expansion (catching things the rule currently misses) is future work.
 
 RulePilot does **not** claim to autonomously produce the perfect detection rule. It produces an analyst-reviewable recommendation with:
 
@@ -32,7 +34,8 @@ RulePilot does **not** claim to autonomously produce the perfect detection rule.
 | Scenario framework (`Scenario` dataclass, generic agent loop) | done |
 | LLM-driven refinement (OpenAI-compatible endpoint) | done |
 | LLM-driven diagnostic planning (custom-rule mode) | done |
-| SPL safety guardrails (read-only check, balanced-paren check) | done |
+| Must-preserve check (rule must still surface flagged signal events) | done |
+| SPL safety guardrails (read-only check, balanced-paren check, syntax-anti-pattern detection) | done |
 | Deterministic fallback model client | done |
 | Streamlit UI with 3 tabs and Live/Replay toggle | done |
 | Scenario 1 — Failed Login Burst Refinement | done |
@@ -340,10 +343,28 @@ Applied to every LLM-proposed SPL (refinements and planned diagnostics):
 
 - **Read-only check** — rejects `delete`, `outputlookup`, `collect`, `sendemail`, `script`, `map`, `rest`.
 - **Balanced-paren check** — string-aware paren/quote counter; rejects malformed SPL before sending to Splunk.
+- **SPL anti-pattern detection** — flags small-model mistakes like `| sort - count > 5` (which is invalid SPL — `sort` doesn't threshold) and rewrites the feedback to push the model toward `| where count >= N`.
+- **Duplicate-attempt detection** — if the model resubmits the same SPL across iterations, the verdict becomes `duplicate_attempt` with sharper feedback so we don't burn the iteration budget on the same wrong answer.
 - **Field whitelist** — the LLM prompt lists the allowed fields per scenario; the model is instructed not to invent fields.
 - **Index discipline** — refined SPL must target the same `SPLUNK_INDEX`; the agent does not silently change index/sourcetype.
 
-If any check fails, the agent raises a clear error instead of running the bad SPL.
+### Quality gates (per iteration)
+
+After each candidate SPL runs against Splunk, the agent computes a verdict:
+
+| Verdict | When | Behavior |
+|---|---|---|
+| `accepted` | ≥20% row reduction AND ≥80% must-preserve coverage | Ship it. |
+| `too_tight` | refined returns 0 rows | Revise — loosen the filter. |
+| `no_reduction` | refined ≥ baseline | Revise — add aggregation/thresholding. |
+| `minimal_reduction` | <20% reduction | Revise — tighten further. |
+| `lost_must_preserve` | <80% of must-catch entities survive in refined output | Revise — names the missing entities in the feedback. |
+| `over_reduction` | ≥95% reduction AND ≤3 rows left (and no preservation check defined) | Revise — likely dropped real signal. |
+| `malformed_spl` / `duplicate_attempt` | see above | Revise with sharper feedback. |
+
+The loop runs up to 2 revisions per scenario.
+
+If any check fails after the iteration budget is exhausted, the report still surfaces the last attempt with its verdict so the analyst sees exactly what went wrong.
 
 ---
 

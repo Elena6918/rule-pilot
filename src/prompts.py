@@ -28,6 +28,36 @@ You must return strict JSON only, with no markdown and no explanatory prose outs
 """.strip()
 
 
+SPL_IDIOM_RULES = """
+SPL idiom rules (follow exactly):
+- To threshold by a count, write `| where count >= N` (or any other field). NEVER write `| sort - count > N` or `| stats ... > N` — those are invalid.
+- To aggregate over time windows, use `| bucket _time span=10m` then `| stats ... by _time ...`.
+- Separate `stats by` fields with commas: `| stats count by user, src_ip` — not `| stats count by user src_ip`.
+- The pipeline must be one linear flow of `command | command | command ...` with no nested operators.
+- Wrap each `| command` on its own line for clarity.
+""".strip()
+
+
+REFINEMENT_EXAMPLE = """
+Worked example (for reference only — do not copy verbatim).
+
+Baseline:
+  search index=demo sourcetype=auth action=login (status=failed OR status=failure)
+  | stats count by user, src_ip
+
+Diagnosis: most failed logins come from a few service accounts and from isolated typos; only a small number form repeated bursts from the same user+IP.
+
+Refined SPL:
+  search index=demo sourcetype=auth action=login (status=failed OR status=failure) user!="svc_*"
+  | bucket _time span=10m
+  | stats count as failed_count by _time, user, src_ip
+  | where failed_count >= 5
+  | sort - failed_count
+
+Why it works: filters out service-account noise, time-windows the events, aggregates per user+src_ip, and only surfaces repeated bursts (>=5 failures in 10 min).
+""".strip()
+
+
 def build_refinement_prompt(
     *,
     scenario_title: str,
@@ -37,50 +67,66 @@ def build_refinement_prompt(
     baseline_spl: str,
     baseline_result_count: int,
     diagnostic_summary: dict[str, Any],
+    signal_block: str | None,
     index: str,
+    revision_feedback: str | None = None,
 ) -> list[dict[str, str]]:
     system_prompt = f"""
-You are a SOC rule-tuning assistant.
-Your task is to refine noisy Splunk SPL detections.
+You are a SOC rule-tuning assistant. Your job is to reduce false positives in noisy Splunk SPL detections WITHOUT dropping the events the analyst flagged under "Must preserve". A rule that fires less often but misses the real suspicious behavior is a failed refinement.
 {SHARED_SAFETY_RULES}
-You must preserve the detection behavior described under "Must preserve".
+{SPL_IDIOM_RULES}
+The candidate_spl must start with "search index={index}" and be a single read-only SPL pipeline.
+Keep all string values short. Do not include markdown.
 {TASK_MARKER_REFINEMENT}
 """.strip()
 
     expected_schema = {key: "string" for key in REFINEMENT_REQUIRED_KEYS}
 
-    user_prompt = f"""
-Refine this Splunk detection for the RulePilot framework.
+    sections = [
+        REFINEMENT_EXAMPLE,
+        "",
+        f"Scenario: {scenario_title}",
+        f"Context: {context_hint}",
+        f"Must preserve: {must_preserve}",
+        f"Target index: {index}",
+        f"Available fields: {json.dumps(available_fields)}",
+        "",
+        "Baseline SPL:",
+        baseline_spl,
+        "",
+        f"Baseline result count: {baseline_result_count}",
+    ]
 
-Scenario:
-{scenario_title}
+    if signal_block:
+        sections += ["", "Key signals from diagnostics:", signal_block]
 
-Context:
-{context_hint}
+    sections += [
+        "",
+        "Diagnostic top rows (compact):",
+        json.dumps(diagnostic_summary, indent=2, sort_keys=True, default=str),
+    ]
 
-Must preserve:
-{must_preserve}
+    if revision_feedback:
+        sections += [
+            "",
+            "Revision feedback (previous attempt was unsatisfactory):",
+            revision_feedback,
+            "Propose a different candidate_spl that addresses this feedback.",
+        ]
 
-Target index:
-{index}
+    sections += [
+        "",
+        "Return strict JSON matching this schema:",
+        json.dumps(expected_schema, indent=2),
+        "",
+        "Rules for candidate_spl:",
+        f"- Must target index={index}",
+        "- Must use only the available fields listed above",
+        "- Must aggregate or filter so the result count is meaningfully smaller than the baseline",
+        "- Must still surface the behavior under 'Must preserve'",
+    ]
 
-Available fields:
-{json.dumps(available_fields, indent=2)}
-
-Baseline SPL:
-{baseline_spl}
-
-Baseline result count:
-{baseline_result_count}
-
-Compact diagnostic summary:
-{json.dumps(diagnostic_summary, indent=2, sort_keys=True, default=str)}
-
-Expected JSON schema:
-{json.dumps(expected_schema, indent=2)}
-
-Return one JSON object that follows the schema exactly. The candidate_spl must be read-only SPL targeting index={index} and must preserve the behavior listed above while reducing noise highlighted by the diagnostics.
-""".strip()
+    user_prompt = "\n".join(sections).strip()
 
     return [
         {"role": "system", "content": system_prompt},

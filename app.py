@@ -109,20 +109,65 @@ def _normalize_rows(rows: list[Any]) -> list[dict[str, Any]]:
 def render_report(report: dict[str, Any]) -> None:
     metrics = compute_before_after_metrics(report)
 
-    cols = st.columns(3)
+    preservation_pct = report.get("preservation_pct")
+    must_preserve_total = report.get("must_preserve_total")
+    show_preservation = preservation_pct is not None
+
+    cols = st.columns(4 if show_preservation else 3)
     cols[0].metric("Baseline result rows", metrics.get("baseline_result_count") or 0)
     cols[1].metric("Refined result rows", metrics.get("refined_result_count") or 0)
+    abs_change = metrics.get("absolute_reduction")
     pct = metrics.get("percent_reduction")
-    cols[2].metric(
-        "Reduction",
-        f"{pct}%" if pct is not None else "—",
-        delta=(
-            f"-{metrics['absolute_reduction']} rows"
-            if metrics.get("absolute_reduction") is not None
+    if abs_change is None or pct is None:
+        cols[2].metric("Change vs. baseline", "—")
+    elif abs_change > 0:
+        cols[2].metric(
+            "FP reduction",
+            f"{pct}%",
+            delta=f"{abs_change} fewer rows",
+            delta_color="inverse",
+        )
+    elif abs_change == 0:
+        cols[2].metric("Change vs. baseline", "0%", delta="no change")
+    else:
+        # Refined returned MORE rows than baseline — surface this clearly.
+        cols[2].metric(
+            "Increase (refinement failed)",
+            f"+{abs(pct)}%",
+            delta=f"{abs(abs_change)} more rows",
+            delta_color="inverse",
+        )
+    if show_preservation:
+        preservation_label = "Must-preserve coverage"
+        preservation_delta = (
+            f"{must_preserve_total} key entities"
+            if must_preserve_total
             else None
-        ),
-        delta_color="inverse",
-    )
+        )
+        delta_color = "off" if preservation_pct >= 80 else "inverse"
+        cols[3].metric(
+            preservation_label,
+            f"{preservation_pct}%",
+            delta=preservation_delta,
+            delta_color=delta_color,
+        )
+
+    iterations = report.get("iterations") or []
+    if iterations:
+        accepted = iterations[-1].get("verdict") == "accepted"
+        badge = "accepted" if accepted else iterations[-1].get("verdict", "n/a")
+        st.caption(
+            f"Refined in {len(iterations)} iteration"
+            f"{'s' if len(iterations) != 1 else ''} — final verdict: **{badge}**"
+        )
+
+    signals = report.get("signals") or {}
+    insights = signals.get("insights") or []
+    if insights:
+        st.divider()
+        st.subheader("Key signals")
+        for insight in insights:
+            st.markdown(f"- {insight}")
 
     st.divider()
     st.subheader("Diagnostics")
@@ -167,6 +212,27 @@ def render_report(report: dict[str, Any]) -> None:
                 continue
             st.markdown(f"**{name}** — {diag.get('result_count', 0)} rows")
             st.code(diag.get("spl", ""), language="text")
+
+    if iterations and len(iterations) > 1:
+        with st.expander(
+            f"Refinement iterations ({len(iterations)})", expanded=False
+        ):
+            for entry in iterations:
+                preserve_badge = ""
+                if entry.get("preservation_pct") is not None:
+                    preserve_badge = (
+                        f" — preserved: `{entry['preservation_pct']}%`"
+                    )
+                st.markdown(
+                    f"**Attempt {entry.get('attempt')}** — "
+                    f"result rows: `{entry.get('refined_result_count')}` — "
+                    f"verdict: `{entry.get('verdict')}`"
+                    f"{preserve_badge}"
+                )
+                st.code(entry.get("candidate_spl", ""), language="text")
+                if entry.get("feedback"):
+                    st.caption(entry["feedback"])
+                st.markdown("---")
 
     st.divider()
     st.subheader("Agent reasoning")
@@ -258,7 +324,8 @@ def render_custom_tab(run_settings: dict[str, Any]) -> None:
         key="custom_context",
     )
     must_preserve = st.text_input(
-        "Must-preserve behavior (what should the refined rule still catch?)",
+        "Must-preserve behavior (the real suspicious activity the rule "
+        "MUST still catch after refinement)",
         value="Encoded PowerShell commands and reverse-shell indicators.",
         key="custom_preserve",
     )
@@ -338,7 +405,8 @@ def main() -> None:
     st.set_page_config(page_title="RulePilot", layout="wide")
     st.title("RulePilot")
     st.caption(
-        "LLM-assisted Splunk detection tuning. "
+        "LLM-assisted Splunk detection tuning — reduce false positives in "
+        "noisy rules without losing the events analysts care about. "
         "Pick a scenario, run it, and review the proposed refinement."
     )
 

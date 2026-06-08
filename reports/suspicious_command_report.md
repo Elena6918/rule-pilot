@@ -23,7 +23,11 @@ index=rulepilot_demo event_type=process command_line="*powershell*" OR command_l
 ## Refined Rule
 
 ```spl
-index=rulepilot_demo event_type=process command_line="*powershell*" OR command_line="*curl*" OR command_line="*wget*" OR command_line="*base64*" NOT parent_process IN (cron, httpd, outlook.exe, sshd) NOT process IN (bash, powershell.exe) NOT user IN ('svc_deploy')
+search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) AND NOT (user STARTSWITH "svc_")
+| bucket _time span=10m
+| stats count as suspicious_count by user, process, parent_process, command_line
+| where suspicious_count >= 5
+| sort - suspicious_count
 ```
 
 ## Before/After Metrics
@@ -31,19 +35,19 @@ index=rulepilot_demo event_type=process command_line="*powershell*" OR command_l
 | Metric | Value |
 | --- | --- |
 | Baseline result rows | 122 |
-| Refined result rows | 87 |
-| Absolute reduction | 35 |
-| Percent reduction | 28.7% |
+| Refined result rows | 6 |
+| Absolute reduction | 116 |
+| Percent reduction | 95.1% |
 
 ## Analyst Interpretation
 
-Refine suspicious-process detection
+Most detections are from common processes and users, with service accounts contributing significant noise.
 
-Rule Tuning Refine the detection to reduce noise by excluding certain processes and users from triggering.
+Filter out service accounts, aggregate by process and user, and identify repeated bursts of suspicious commands. Filters out service accounts to reduce noise. Aggregates events over time windows and surfaces only repeated bursts of suspicious commands.
 
-**Expected effect:** Reduce false positives by 50%
+**Expected effect:** Reduces false positives by filtering out benign activity while preserving high-risk execution patterns.
 
-**Risk:** Low
+**Risk:** Misses occasional true positives if the burst threshold is too high, but this risk is mitigated by the reduced noise.
 
 ## Caveats
 

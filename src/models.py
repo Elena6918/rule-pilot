@@ -232,7 +232,7 @@ def model_client_from_env(*, index: str) -> ModelClient:
     if provider == "openai_compatible":
         return OpenAICompatibleModelClient(
             base_url=os.getenv("RULEPILOT_MODEL_BASE_URL", "http://localhost:11434/v1"),
-            model=os.getenv("RULEPILOT_MODEL_NAME", "llama3.2:3b"),
+            model=os.getenv("RULEPILOT_MODEL_NAME", "qwen2.5:7b"),
             api_key=os.getenv("RULEPILOT_MODEL_API_KEY", "local"),
             timeout=_env_int("RULEPILOT_MODEL_TIMEOUT", 60),
             temperature=_env_float("RULEPILOT_MODEL_TEMPERATURE", 0.0),
