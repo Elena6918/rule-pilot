@@ -2,3 +2,5 @@
 data/*.jsonl
 __pycache__/
 *.pyc
+CLAUDE.md
+
