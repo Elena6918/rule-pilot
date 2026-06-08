@@ -23,9 +23,9 @@ index=rulepilot_demo event_type=process command_line="*powershell*" OR command_l
 ## Refined Rule
 
 ```spl
-search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) AND NOT (user STARTSWITH "svc_")
+search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) user!="svc_*" parent_process IN ("bash", "cmd.exe", "python3")
 | bucket _time span=10m
-| stats count as suspicious_count by user, process, parent_process, command_line
+| stats count as suspicious_count by _time, process, user, parent_process, command_line
 | where suspicious_count >= 5
 | sort - suspicious_count
 ```
@@ -35,19 +35,19 @@ search index=rulepilot_demo event_type=process (command_line=*powershell* OR com
 | Metric | Value |
 | --- | --- |
 | Baseline result rows | 122 |
-| Refined result rows | 6 |
-| Absolute reduction | 116 |
-| Percent reduction | 95.1% |
+| Refined result rows | N/A |
+| Absolute reduction | N/A |
+| Percent reduction | N/A |
 
 ## Analyst Interpretation
 
-Most detections are from common processes and users, with service accounts contributing significant noise.
+Baseline triggers constantly on admins, CI jobs, and routine scripts. Need to reduce noise while preserving high-risk execution patterns.
 
-Filter out service accounts, aggregate by process and user, and identify repeated bursts of suspicious commands. Filters out service accounts to reduce noise. Aggregates events over time windows and surfaces only repeated bursts of suspicious commands.
+Aggregate by time window, filter out service accounts, and focus on specific command-line patterns. Filters out service accounts and common parent processes. Aggregates events over time to identify repeated bursts of suspicious activity.
 
-**Expected effect:** Reduces false positives by filtering out benign activity while preserving high-risk execution patterns.
+**Expected effect:** Reduces false positives by filtering out benign noise while still surfacing high-risk execution patterns.
 
-**Risk:** Misses occasional true positives if the burst threshold is too high, but this risk is mitigated by the reduced noise.
+**Risk:** May miss occasional isolated incidents, but should reduce overall noise.
 
 ## Caveats
 

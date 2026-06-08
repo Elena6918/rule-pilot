@@ -84,7 +84,7 @@ class RulePilotAgent:
             max_results=max_results,
         )
 
-        proposal, iterations, refined_results = self._refine_with_revisions(
+        proposal, iterations, refined_results, final_status = self._refine_with_revisions(
             scenario=scenario,
             baseline_count=baseline_count,
             diagnostics=diagnostics,
@@ -96,14 +96,21 @@ class RulePilotAgent:
         )
 
         refined_spl = proposal["candidate_spl"].strip()
-        self._write_text(Path(scenario.refined_spl_output_path), refined_spl)
+        # Only persist the refined SPL to disk when we actually accepted it.
+        # Otherwise the on-disk artifact would silently advertise a broken rule.
+        if final_status == "accepted":
+            self._write_text(Path(scenario.refined_spl_output_path), refined_spl)
 
         return {
             "scenario": scenario.key,
             "scenario_title": scenario.title,
             "baseline_spl": scenario.baseline_spl,
             "baseline_result_count": baseline_count,
-            "refined_result_count": len(refined_results),
+            "refined_result_count": (
+                len(refined_results) if final_status == "accepted" else None
+            ),
+            "final_status": final_status,
+            "final_status_is_accepted": final_status == "accepted",
             "diagnostic_results": diagnostics,
             "signals": signals,
             "diagnosis_text": proposal["diagnosis"],
@@ -170,6 +177,12 @@ class RulePilotAgent:
             if not is_read_only_spl(spl):
                 raise RuntimeError(
                     f"Planned diagnostic {name!r} contains an unsafe SPL command."
+                )
+            parser_ok, parser_error = self.client.validate_spl(spl)
+            if not parser_ok:
+                raise RuntimeError(
+                    f"Planned diagnostic {name!r} failed Splunk SPL parser: "
+                    f"{parser_error or 'unknown error'}"
                 )
             plan[name] = spl
 
@@ -241,7 +254,7 @@ class RulePilotAgent:
         earliest_time: str,
         latest_time: str,
         max_results: int,
-    ) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], str]:
         """Call the model, run its candidate, and revise up to ``max_revisions`` times.
 
         Returns the final proposal, the iteration history (one entry per attempt),
@@ -255,6 +268,12 @@ class RulePilotAgent:
         proposal: dict[str, str] | None = None
         refined_results: list[dict[str, Any]] = []
         seen_spls: set[str] = set()
+
+        # Track the accepted attempt separately. If no attempt is accepted,
+        # the report must signal that explicitly — we won't claim a fake
+        # "100% reduction" by treating a rejected attempt as the final refinement.
+        accepted_proposal: dict[str, Any] | None = None
+        accepted_results: list[dict[str, Any]] = []
 
         for attempt in range(self.max_revisions + 1):
             messages = build_refinement_prompt(
@@ -276,6 +295,32 @@ class RulePilotAgent:
             normalized = self._normalize_spl(candidate_spl)
             is_duplicate = normalized in seen_spls
             seen_spls.add(normalized)
+
+            # Pre-flight grammar check via Splunk's own parser. If invalid,
+            # skip the actual search job and feed the parser's error back to
+            # the LLM as revision feedback.
+            parser_ok, parser_error = self.client.validate_spl(candidate_spl)
+            if not parser_ok:
+                feedback = (
+                    f"Splunk's SPL parser rejected your candidate. "
+                    f"Parser error: {parser_error or 'unknown'}. "
+                    f"Rewrite the pipeline using valid SPL only."
+                )
+                iterations.append(
+                    {
+                        "attempt": attempt + 1,
+                        "candidate_spl": candidate_spl,
+                        "refined_result_count": None,
+                        "verdict": "parser_rejected",
+                        "feedback": feedback,
+                        "preservation_pct": None,
+                    }
+                )
+                if attempt == self.max_revisions:
+                    break
+                revision_feedback = feedback
+                refined_results = []
+                continue
 
             refined_results = self.client.run_search(
                 candidate_spl,
@@ -315,13 +360,28 @@ class RulePilotAgent:
                 }
             )
 
-            if verdict["accept"] or attempt == self.max_revisions:
+            if verdict["accept"]:
+                accepted_proposal = proposal
+                accepted_results = refined_results
+                break
+
+            if attempt == self.max_revisions:
                 break
 
             revision_feedback = verdict["feedback"]
 
         assert proposal is not None
-        return proposal, iterations, refined_results
+        if accepted_proposal is not None:
+            return accepted_proposal, iterations, accepted_results, "accepted"
+
+        # No attempt was accepted. Surface the last attempt for transparency
+        # but tag the run so the caller (CLI / UI / Markdown report) can render
+        # honestly instead of pretending the rejected SPL was a successful
+        # refinement.
+        final_status = (
+            iterations[-1]["verdict"] if iterations else "no_attempts"
+        )
+        return proposal, iterations, refined_results, final_status
 
     def _validate_candidate(self, candidate_spl: str) -> None:
         if not is_read_only_spl(candidate_spl):

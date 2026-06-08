@@ -131,6 +131,88 @@ class SplunkClient:
         except SplunkClientError:
             return False
 
+    def validate_spl(self, spl: str) -> tuple[bool, str | None]:
+        """Pre-flight validation via Splunk's own parser.
+
+        Calls ``/services/search/parser`` with ``parse_only=true`` so Splunk's
+        SPL grammar parses the search without dispatching a job. Catches
+        malformed constructs (e.g. ``user STARTSWITH "svc_"``,
+        ``| sort - count > 5``, unmatched quotes) using Splunk's own engine
+        instead of regex heuristics on our side.
+
+        Returns ``(is_valid, error_message)``. A valid SPL returns
+        ``(True, None)``; an invalid SPL returns ``(False, "...")`` where the
+        string is Splunk's own parse-error text (great as LLM feedback).
+        """
+        if not spl.strip():
+            return False, "SPL is empty."
+
+        normalized = self._normalize_search_spl(spl)
+        url = f"{self.base_url}/services/search/parser"
+
+        try:
+            if not self.verify_ssl:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", InsecureRequestWarning)
+                    response = requests.get(
+                        url,
+                        params={
+                            "q": normalized,
+                            "parse_only": "true",
+                            "output_mode": "json",
+                        },
+                        auth=self.auth,
+                        verify=self.verify_ssl,
+                        timeout=self.timeout,
+                    )
+            else:
+                response = requests.get(
+                    url,
+                    params={
+                        "q": normalized,
+                        "parse_only": "true",
+                        "output_mode": "json",
+                    },
+                    auth=self.auth,
+                    timeout=self.timeout,
+                )
+        except (ConnectionError, Timeout) as exc:
+            raise SplunkConnectionError(
+                f"Could not reach Splunk parser at {self.base_url}: {exc}"
+            ) from exc
+        except RequestException as exc:
+            raise SplunkConnectionError(f"Splunk parser request failed: {exc}") from exc
+
+        if response.status_code in {401, 403}:
+            raise SplunkAuthenticationError(
+                "Splunk authentication failed for parser endpoint."
+            )
+
+        if 200 <= response.status_code < 300:
+            return True, None
+
+        # 400-class responses indicate a parse error. Splunk returns the
+        # specific error in either JSON ``messages`` or the raw body.
+        error_text = self._extract_parser_error(response) or response.text[:500].strip()
+        return False, error_text
+
+    @staticmethod
+    def _extract_parser_error(response: Response) -> str | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            for entry in messages:
+                if isinstance(entry, dict):
+                    text = entry.get("text")
+                    if isinstance(text, str) and text.strip():
+                        return text.strip()
+        return None
+
     def run_search(
         self,
         spl: str,

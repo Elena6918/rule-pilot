@@ -1,5 +1,5 @@
-search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) AND NOT (user STARTSWITH "svc_")
+search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) user!="svc_*" parent_process IN ("bash", "cmd.exe", "python3")
 | bucket _time span=10m
-| stats count as suspicious_count by user, process, parent_process, command_line
+| stats count as suspicious_count by _time, process, user, parent_process, command_line
 | where suspicious_count >= 5
 | sort - suspicious_count

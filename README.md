@@ -233,6 +233,66 @@ Do not commit `.env`.
 
 ---
 
+## Splunk MCP Server (optional, Phase 5b)
+
+RulePilot can connect to **Splunk's official MCP Server** (Splunkbase app #7931, GA 2026). This unlocks Splunk-native tools — including `saia_optimize_spl` (when the Splunk AI Assistant app is also installed and activated) which routes refinement through Splunk's own AI, sidestepping local-model SPL grammar issues entirely.
+
+### Install the MCP Server app
+
+On the Splunk search head:
+
+1. In Splunk Web → **Apps → Find More Apps** → search for "Splunk MCP Server" → install.
+2. After install, navigate to the **Splunk MCP Server** app from the Apps menu.
+3. Click **Create MCP Encrypted Token**. Tokens use the audience `mcp`. Note: encrypted tokens are different from regular Splunk API tokens — they're issued by the MCP Server app and can be time-bound and revoked.
+4. Copy the endpoint URL from the **Endpoints** panel. For Splunk Enterprise on the management port it will look like `https://<splunk-host>:8089/services/mcp` — the same port we already tunnel for the REST API, so no new SSH forwarding is needed.
+
+### Configure RulePilot
+
+Add to `.env`:
+
+```env
+SPLUNK_MCP_ENDPOINT=https://localhost:8089/services/mcp
+SPLUNK_MCP_TOKEN=<your encrypted token>
+```
+
+The MCP transport reuses the existing `SPLUNK_VERIFY_SSL` setting, so self-signed certs work out of the box when `SPLUNK_VERIFY_SSL=false`.
+
+### Verify the connection
+
+In the Streamlit UI sidebar, click **Test MCP connection**. You should see:
+
+```
+Connected to https://localhost:8089/services/mcp — N tools available.
+Sample tool names:
+- splunk_run_query
+- splunk_get_indexes
+- splunk_get_knowledge_objects
+- ...
+```
+
+Or from the command line:
+
+```bash
+python3 -m src.splunk_mcp_client
+```
+
+### Splunk AI Assistant (separate, optional)
+
+Tools prefixed `saia_*` (`saia_optimize_spl`, `saia_generate_spl`, `saia_explain_spl`, `saia_ask_splunk_question`) only appear in the tool list when the **Splunk AI Assistant** app is *also* installed and activated. Without it, the MCP Server still exposes the `splunk_*` tools (search, knowledge-object lookup, metadata). Activating AI Assistant requires an activation code from Splunk.
+
+### Current integration status
+
+| Piece | State |
+| --- | --- |
+| `SplunkMCPClient` (sync wrapper over the `mcp` Python SDK) | done |
+| `Test MCP connection` sidebar button | done |
+| `.env.example` template | done |
+| Connection verified against Splunk MCP Server v1.2.0 on the dev environment | done |
+| Agent uses MCP for refinement (`saia_optimize_spl`) | pending — waits for AI Assistant activation |
+| Agent uses MCP for saved-search exemplars (`splunk_get_knowledge_objects`) | pending |
+
+---
+
 ## Splunk Index Setup
 
 The index name is read from `SPLUNK_INDEX` — both baseline SPL files use `index={index}` as a placeholder that the scenario builders fill in at runtime, so re-versioning the index (e.g. `rulepilot-demo-v2`) requires no code changes.
@@ -343,7 +403,8 @@ Applied to every LLM-proposed SPL (refinements and planned diagnostics):
 
 - **Read-only check** — rejects `delete`, `outputlookup`, `collect`, `sendemail`, `script`, `map`, `rest`.
 - **Balanced-paren check** — string-aware paren/quote counter; rejects malformed SPL before sending to Splunk.
-- **SPL anti-pattern detection** — flags small-model mistakes like `| sort - count > 5` (which is invalid SPL — `sort` doesn't threshold) and rewrites the feedback to push the model toward `| where count >= N`.
+- **Splunk-native SPL parser pre-flight** — every candidate and every LLM-planned diagnostic is sent to Splunk's `/services/search/parser` endpoint with `parse_only=true` before any search job is dispatched. The parser's own error message is fed back to the LLM as revision feedback. Catches small-model mistakes like `user STARTSWITH "svc_"`, missing quotes, and invalid threshold syntax — using Splunk's own grammar, not regex heuristics.
+- **SPL anti-pattern detection** — backup heuristic flag for patterns like `| sort - count > 5` that Splunk's parser sometimes accepts as "search for the literal string `>` and `5`" but the model clearly meant as a threshold.
 - **Duplicate-attempt detection** — if the model resubmits the same SPL across iterations, the verdict becomes `duplicate_attempt` with sharper feedback so we don't burn the iteration budget on the same wrong answer.
 - **Field whitelist** — the LLM prompt lists the allowed fields per scenario; the model is instructed not to invent fields.
 - **Index discipline** — refined SPL must target the same `SPLUNK_INDEX`; the agent does not silently change index/sourcetype.
@@ -360,6 +421,7 @@ After each candidate SPL runs against Splunk, the agent computes a verdict:
 | `minimal_reduction` | <20% reduction | Revise — tighten further. |
 | `lost_must_preserve` | <80% of must-catch entities survive in refined output | Revise — names the missing entities in the feedback. |
 | `over_reduction` | ≥95% reduction AND ≤3 rows left (and no preservation check defined) | Revise — likely dropped real signal. |
+| `parser_rejected` | Splunk's SPL parser refused the candidate | Skip the search job entirely; feed parser's own error as revision feedback. |
 | `malformed_spl` / `duplicate_attempt` | see above | Revise with sharper feedback. |
 
 The loop runs up to 2 revisions per scenario.

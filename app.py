@@ -109,34 +109,56 @@ def _normalize_rows(rows: list[Any]) -> list[dict[str, Any]]:
 def render_report(report: dict[str, Any]) -> None:
     metrics = compute_before_after_metrics(report)
 
+    final_status = report.get("final_status") or "accepted"
+    accepted = report.get("final_status_is_accepted")
+    if accepted is None:  # legacy reports without final_status
+        accepted = True
+
+    if not accepted:
+        st.error(
+            f"**No acceptable refinement was produced.** "
+            f"All {len(report.get('iterations') or [])} attempts ended in "
+            f"`{final_status}`. The metrics, downloads, and refined SPL "
+            f"below show the **last attempted** candidate for transparency — "
+            f"do not treat it as a working rule. Review the iteration history "
+            f"to see what went wrong."
+        )
+
     preservation_pct = report.get("preservation_pct")
     must_preserve_total = report.get("must_preserve_total")
-    show_preservation = preservation_pct is not None
+    show_preservation = preservation_pct is not None and accepted
 
     cols = st.columns(4 if show_preservation else 3)
     cols[0].metric("Baseline result rows", metrics.get("baseline_result_count") or 0)
-    cols[1].metric("Refined result rows", metrics.get("refined_result_count") or 0)
-    abs_change = metrics.get("absolute_reduction")
-    pct = metrics.get("percent_reduction")
-    if abs_change is None or pct is None:
-        cols[2].metric("Change vs. baseline", "—")
-    elif abs_change > 0:
-        cols[2].metric(
-            "FP reduction",
-            f"{pct}%",
-            delta=f"{abs_change} fewer rows",
-            delta_color="inverse",
-        )
-    elif abs_change == 0:
-        cols[2].metric("Change vs. baseline", "0%", delta="no change")
+
+    if not accepted:
+        cols[1].metric("Refined result rows", "—", delta="no accepted refinement")
+        cols[2].metric("FP reduction", "—", delta="—")
     else:
-        # Refined returned MORE rows than baseline — surface this clearly.
-        cols[2].metric(
-            "Increase (refinement failed)",
-            f"+{abs(pct)}%",
-            delta=f"{abs(abs_change)} more rows",
-            delta_color="inverse",
+        cols[1].metric(
+            "Refined result rows", metrics.get("refined_result_count") or 0
         )
+        abs_change = metrics.get("absolute_reduction")
+        pct = metrics.get("percent_reduction")
+        if abs_change is None or pct is None:
+            cols[2].metric("Change vs. baseline", "—")
+        elif abs_change > 0:
+            cols[2].metric(
+                "FP reduction",
+                f"{pct}%",
+                delta=f"{abs_change} fewer rows",
+                delta_color="inverse",
+            )
+        elif abs_change == 0:
+            cols[2].metric("Change vs. baseline", "0%", delta="no change")
+        else:
+            # Refined returned MORE rows than baseline — surface this clearly.
+            cols[2].metric(
+                "Increase (refinement failed)",
+                f"+{abs(pct)}%",
+                delta=f"{abs(abs_change)} more rows",
+                delta_color="inverse",
+            )
     if show_preservation:
         preservation_label = "Must-preserve coverage"
         preservation_delta = (
@@ -154,8 +176,7 @@ def render_report(report: dict[str, Any]) -> None:
 
     iterations = report.get("iterations") or []
     if iterations:
-        accepted = iterations[-1].get("verdict") == "accepted"
-        badge = "accepted" if accepted else iterations[-1].get("verdict", "n/a")
+        badge = "accepted" if accepted else final_status
         st.caption(
             f"Refined in {len(iterations)} iteration"
             f"{'s' if len(iterations) != 1 else ''} — final verdict: **{badge}**"
@@ -252,17 +273,31 @@ def render_report(report: dict[str, Any]) -> None:
         st.caption("Baseline")
         st.code(report.get("baseline_spl") or "", language="text")
     with right:
-        st.caption("Refined")
+        st.caption(
+            "Refined (last attempted, NOT accepted)"
+            if not accepted
+            else "Refined"
+        )
         st.code(report.get("refined_spl") or "", language="text")
 
     st.divider()
     st.subheader("Downloads")
     refined_spl = report.get("refined_spl") or ""
     scenario_key = report.get("scenario") or "rule"
+    if not accepted:
+        st.caption(
+            "Downloads reflect the last attempted candidate, which was not "
+            "accepted by RulePilot. Use only if you intend to debug the "
+            "model's output."
+        )
     st.download_button(
         "Download refined SPL",
         data=refined_spl,
-        file_name=f"{scenario_key}_refined.spl",
+        file_name=(
+            f"{scenario_key}_refined.spl"
+            if accepted
+            else f"{scenario_key}_LAST_REJECTED.spl"
+        ),
         mime="text/plain",
     )
     report_md_path = REPO_ROOT / "reports" / f"{scenario_key}_report.md"
@@ -427,6 +462,15 @@ def main() -> None:
             step=100,
         )
 
+        st.divider()
+        st.subheader("Splunk MCP")
+        st.caption(
+            "Diagnostic: verify the Splunk MCP server is reachable with the "
+            "configured endpoint + encrypted token."
+        )
+        if st.button("Test MCP connection", key="mcp_test"):
+            _render_mcp_test_result()
+
     run_settings = {
         "mode": mode,
         "earliest_time": earliest_time,
@@ -443,6 +487,41 @@ def main() -> None:
         render_demo_tab("suspicious_command", run_settings)
     with tab3:
         render_custom_tab(run_settings)
+
+
+def _render_mcp_test_result() -> None:
+    try:
+        from src.splunk_mcp_client import (
+            SplunkMCPClient,
+            SplunkMCPClientError,
+        )
+    except ModuleNotFoundError:
+        st.error(
+            "The `mcp` Python package is not installed. Run: pip install mcp"
+        )
+        return
+
+    try:
+        client = SplunkMCPClient.from_env()
+    except SplunkMCPClientError as exc:
+        st.error(str(exc))
+        return
+
+    with st.spinner("Listing MCP tools..."):
+        try:
+            result = client.ping()
+        except SplunkMCPClientError as exc:
+            st.error(f"MCP connection failed: {exc}")
+            return
+
+    st.success(
+        f"Connected to {result['endpoint']} — {result['tool_count']} tools "
+        f"available."
+    )
+    if result["sample_tool_names"]:
+        st.caption("Sample tool names:")
+        for name in result["sample_tool_names"]:
+            st.markdown(f"- `{name}`")
 
 
 if __name__ == "__main__":
