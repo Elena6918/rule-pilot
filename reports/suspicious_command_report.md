@@ -41,9 +41,9 @@ search index=rulepilot_demo event_type=process (command_line="*powershell* -Enco
 
 The baseline SPL is too broad, capturing routine admin and service account activity.
 
-Filter out service accounts and focus on high-risk command patterns. This refinement targets specific high-risk patterns and excludes service accounts, reducing noise.
+Filter out service accounts and focus on high-risk command patterns. This refinement targets specific high-risk command patterns and excludes service accounts, reducing noise from benign activity.
 
-**Expected effect:** The result count should decrease significantly, focusing on truly suspicious activity.
+**Expected effect:** The result count should decrease significantly, focusing on truly suspicious command executions.
 
 **Risk:** Low risk of missing true positives as the refinement still captures high-risk patterns.
 

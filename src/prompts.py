@@ -202,6 +202,7 @@ def build_preservation_compilation_prompt(
     baseline_spl: str,
     available_fields: list[str],
     index: str,
+    revision_feedback: str | None = None,
 ) -> list[dict[str, str]]:
     """Compile an analyst's natural-language must-preserve statement into an
     executable preservation-check SPL + key fields.
@@ -234,6 +235,17 @@ The search must target index={index}, use only the available fields, and END wit
         "",
         "Must preserve (analyst's words):",
         must_preserve,
+    ]
+
+    if revision_feedback:
+        sections += [
+            "",
+            "Your previous attempt was rejected:",
+            revision_feedback,
+            "Return a corrected check.",
+        ]
+
+    sections += [
         "",
         "Return strict JSON matching this schema:",
         json.dumps(expected_schema, indent=2),

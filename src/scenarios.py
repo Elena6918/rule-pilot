@@ -128,14 +128,15 @@ def failed_login_scenario(index: str) -> Scenario:
         baseline_spl=baseline_spl,
         context_hint=(
             "This is an authentication failure detection. The baseline is too noisy "
-            "because it surfaces every single failed login, including isolated typos "
-            "and routine service-account churn."
+            "because it surfaces every single failed login, including one-off "
+            "low-volume failures from ordinary users and routine service-account "
+            "activity."
         ),
         must_preserve=(
             "Genuine brute-force or password-spray attempts: a single source "
             "repeatedly failing to log into an account over a short period. These "
-            "must keep firing — isolated typos and routine service-account churn "
-            "are noise, not attacks."
+            "must keep firing — one-off, low-volume failures and routine "
+            "service-account churn are noise, not attacks."
         ),
         available_fields=AUTH_FIELDS,
         refined_spl_output_path=str(

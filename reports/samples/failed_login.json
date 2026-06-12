@@ -1,4 +1,6 @@
 {
+  "_golden_check_keys": "user, src_ip",
+  "_golden_check_spl": "search index=rulepilot_demo event_type=auth action=login (status=failed OR status=failure)\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5\n| stats count by user, src_ip",
   "baseline_result_count": 113,
   "baseline_spl": "index=rulepilot_demo sourcetype=auth action=login\n| stats count by user, src_ip, status\n| sort - count",
   "burst_diagnostic_name": "suspicious_failed_login_bursts",
@@ -166,7 +168,7 @@
   "iterations": [
     {
       "attempt": 1,
-      "candidate_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\" reason!=\"mistyped_password\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
+      "candidate_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\" reason!=\"mistyped_password\" reason!=\"expired_password\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
       "feedback": "Candidate reduced rows by 99.1% (113 \u2192 1). Preserved 100.0% of must-catch entities.",
       "preservation_pct": 100.0,
       "refined_result_count": 1,
@@ -181,11 +183,11 @@
   "must_preserve_total": 1,
   "preservation_pct": 100.0,
   "refined_result_count": 1,
-  "refined_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\" reason!=\"mistyped_password\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
+  "refined_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\" reason!=\"mistyped_password\" reason!=\"expired_password\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
   "refined_spl_output_path": "/Users/elena/Desktop/rule-pilot/detections/failed_login_refined.spl",
-  "refinement_rationale": "Filter out service accounts and focus on repeated failures within a short time window. By excluding service accounts and mistyped passwords, and focusing on repeated failures within a 10-minute window, we reduce noise and highlight potential attacks.",
-  "refinement_strategy": "Filter out service accounts and focus on repeated failures within a short time window.",
-  "risk": "There is a low risk of missing genuine attacks if they do not meet the threshold of repeated failures within the specified time window.",
+  "refinement_rationale": "Filter out service accounts and common benign reasons, then aggregate failed logins over time to detect bursts. By excluding service accounts and benign reasons, and focusing on repeated failures within a short time window, we reduce noise and highlight potential attacks.",
+  "refinement_strategy": "Filter out service accounts and common benign reasons, then aggregate failed logins over time to detect bursts.",
+  "risk": "There is a minimal risk of missing some edge cases of attacks if they do not meet the threshold, but the focus is on reducing false positives.",
   "scenario": "failed_login",
   "scenario_title": "Failed Login Burst Refinement",
   "signals": {

@@ -10,6 +10,7 @@ from typing import Any
 try:
     from src.models import (
         ModelClient,
+        ModelResponseError,
         has_balanced_parens,
         is_read_only_spl,
         model_client_from_env,
@@ -25,6 +26,7 @@ try:
 except ModuleNotFoundError:
     from models import (
         ModelClient,
+        ModelResponseError,
         has_balanced_parens,
         is_read_only_spl,
         model_client_from_env,
@@ -295,9 +297,36 @@ class RulePilotAgent:
                 index=self.client.index,
                 revision_feedback=revision_feedback,
             )
-            proposal = self.model_client.generate_json(messages)
-            candidate_spl = proposal["candidate_spl"].strip()
-            self._validate_candidate(candidate_spl)
+            # A malformed generation (unbalanced parens/quotes, unsafe command,
+            # bad JSON) must not crash the run — feed it back as revision
+            # feedback, exactly like a parser rejection. Infrastructure errors
+            # (endpoint unreachable, HTTP error) are NOT ModelResponseError and
+            # still propagate.
+            try:
+                proposal = self.model_client.generate_json(messages)
+                candidate_spl = proposal["candidate_spl"].strip()
+                self._validate_candidate(candidate_spl)
+            except ModelResponseError as exc:
+                feedback = (
+                    f"Your previous response was rejected: {exc} "
+                    f"Return ONE read-only SPL pipeline with balanced parentheses "
+                    f"and matched quotes."
+                )
+                iterations.append(
+                    {
+                        "attempt": attempt + 1,
+                        "candidate_spl": None,
+                        "refined_result_count": None,
+                        "verdict": "malformed_spl",
+                        "feedback": feedback,
+                        "preservation_pct": None,
+                    }
+                )
+                if attempt == self.max_revisions:
+                    break
+                revision_feedback = feedback
+                refined_results = []
+                continue
 
             normalized = self._normalize_spl(candidate_spl)
             is_duplicate = normalized in seen_spls
@@ -377,9 +406,20 @@ class RulePilotAgent:
 
             revision_feedback = verdict["feedback"]
 
-        assert proposal is not None
         if accepted_proposal is not None:
             return accepted_proposal, iterations, accepted_results, "accepted"
+
+        if proposal is None:
+            # Every attempt produced an unusable response. Surface an honest
+            # placeholder so the report renders the failure instead of crashing.
+            proposal = {
+                "diagnosis": "The model did not return a usable SPL candidate.",
+                "refinement_strategy": "",
+                "candidate_spl": "",
+                "rationale": "",
+                "expected_effect": "",
+                "risk": "",
+            }
 
         # No attempt was accepted. Surface the last attempt for transparency
         # but tag the run so the caller (CLI / UI / Markdown report) can render
@@ -392,9 +432,13 @@ class RulePilotAgent:
 
     def _validate_candidate(self, candidate_spl: str) -> None:
         if not is_read_only_spl(candidate_spl):
-            raise RuntimeError("Refined SPL from model contains an unsafe command.")
+            raise ModelResponseError(
+                "Refined SPL from model contains an unsafe command."
+            )
         if not has_balanced_parens(candidate_spl):
-            raise RuntimeError("Refined SPL has unbalanced parentheses or quotes.")
+            raise ModelResponseError(
+                "Refined SPL has unbalanced parentheses or quotes."
+            )
 
     @staticmethod
     def _normalize_spl(spl: str) -> str:
@@ -463,13 +507,34 @@ class RulePilotAgent:
     def _extract_search_clause(spl: str) -> str:
         """Return the leading filter clause (everything before the first | command).
 
-        If the SPL doesn't start with `search`, we prepend it so the probe is a
-        valid Splunk search.
+        The command boundary is the first ``|`` that is NOT inside a quoted
+        string. A naive ``split("|")`` breaks on pipes inside values like
+        ``command_line="*|*"`` (curl|sh detection), truncating the clause and
+        making the preservation probe fail. If the SPL doesn't start with
+        ``search`` we prepend it so the probe is a valid Splunk search.
         """
         stripped = spl.strip()
         if not stripped or stripped.startswith("|"):
             return ""
-        clause = stripped.split("|", 1)[0].strip()
+        in_string: str | None = None
+        escape = False
+        boundary = len(stripped)
+        for index, ch in enumerate(stripped):
+            if escape:
+                escape = False
+                continue
+            if in_string is not None:
+                if ch == "\\":
+                    escape = True
+                elif ch == in_string:
+                    in_string = None
+                continue
+            if ch in ('"', "'"):
+                in_string = ch
+            elif ch == "|":
+                boundary = index
+                break
+        clause = stripped[:boundary].strip()
         if not clause:
             return ""
         first_token = clause.split(None, 1)[0].lower()
@@ -664,6 +729,7 @@ def compile_preservation_check(
     baseline_spl: str,
     available_fields: list[str],
     index: str,
+    max_attempts: int = 3,
 ) -> tuple[str, list[str]]:
     """Compile a natural-language must-preserve statement into an executable
     preservation-check SPL plus its key fields.
@@ -676,34 +742,62 @@ def compile_preservation_check(
     if not must_preserve.strip():
         raise RuntimeError("Describe what must be preserved before generating a check.")
 
-    messages = build_preservation_compilation_prompt(
-        must_preserve=must_preserve,
-        baseline_spl=baseline_spl,
-        available_fields=available_fields,
-        index=index,
-    )
-    result = model_client.generate_json(messages)
-
-    spl = str(result.get("preservation_check_spl") or "").strip()
-    raw_keys = result.get("preservation_key_fields") or []
-    if isinstance(raw_keys, str):
-        raw_keys = raw_keys.split(",")
-    key_fields = [str(k).strip() for k in raw_keys if str(k).strip()]
-
-    if not spl:
-        raise RuntimeError("The model returned an empty preservation check.")
-    if not key_fields:
-        raise RuntimeError("The model did not return any key fields.")
-    if not is_read_only_spl(spl):
-        raise RuntimeError("The compiled check contains an unsafe SPL command.")
-
-    parser_ok, parser_error = splunk_client.validate_spl(spl)
-    if not parser_ok:
-        raise RuntimeError(
-            f"Splunk's parser rejected the compiled check: "
-            f"{parser_error or 'unknown error'}"
+    # The model occasionally emits unbalanced/invalid SPL. Retry with feedback
+    # (parser error or safety error) instead of failing on the first miss, the
+    # same way the refinement loop does.
+    feedback: str | None = None
+    last_error = "unknown error"
+    for _ in range(max_attempts):
+        messages = build_preservation_compilation_prompt(
+            must_preserve=must_preserve,
+            baseline_spl=baseline_spl,
+            available_fields=available_fields,
+            index=index,
+            revision_feedback=feedback,
         )
-    return spl, key_fields
+        try:
+            result = model_client.generate_json(messages)
+        except ModelResponseError as exc:
+            last_error = str(exc)
+            feedback = (
+                f"{exc} Return ONE read-only SPL search with balanced parentheses "
+                f"and matched quotes, ending in `| stats count by <key fields>`."
+            )
+            continue
+
+        spl = str(result.get("preservation_check_spl") or "").strip()
+        raw_keys = result.get("preservation_key_fields") or []
+        if isinstance(raw_keys, str):
+            raw_keys = raw_keys.split(",")
+        key_fields = [str(k).strip() for k in raw_keys if str(k).strip()]
+
+        if not spl or not key_fields:
+            last_error = "empty SPL or key fields"
+            feedback = (
+                "Return a non-empty preservation_check_spl and a non-empty "
+                "preservation_key_fields list."
+            )
+            continue
+        if not is_read_only_spl(spl):
+            last_error = "unsafe SPL command"
+            feedback = "The check must be read-only. Remove the unsafe command."
+            continue
+
+        parser_ok, parser_error = splunk_client.validate_spl(spl)
+        if not parser_ok:
+            last_error = parser_error or "parser rejected the check"
+            feedback = (
+                f"Splunk's parser rejected your SPL: {last_error}. "
+                f"Rewrite it as valid read-only SPL."
+            )
+            continue
+
+        return spl, key_fields
+
+    raise RuntimeError(
+        f"Could not compile a valid must-preserve check after {max_attempts} "
+        f"attempts. Last error: {last_error}"
+    )
 
 
 def _detect_spl_syntax_issue(spl: str) -> str | None:

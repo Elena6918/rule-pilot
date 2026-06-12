@@ -37,6 +37,16 @@ UNSAFE_SPL_COMMANDS = {
 }
 
 
+class ModelResponseError(RuntimeError):
+    """The model returned a malformed or unsafe response (e.g. unbalanced SPL,
+    bad JSON, unsafe command).
+
+    Distinct from infrastructure errors (endpoint unreachable, HTTP error): a
+    ModelResponseError is the model's *content* being wrong, so the agent loop
+    can treat it as a revision opportunity instead of aborting the run.
+    """
+
+
 class ModelClient(Protocol):
     def generate_json(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         ...
@@ -103,10 +113,11 @@ class OpenAICompatibleModelClient:
 
     def generate_json(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         required = _required_keys_for(messages)
-        result = parse_model_json_response(
-            self.generate_text(messages),
-            required_keys=required,
-        )
+        text = self.generate_text(messages)
+        try:
+            result = parse_model_json_response(text, required_keys=required)
+        except ValueError as exc:
+            raise ModelResponseError(str(exc)) from exc
         _enforce_response_safety(result, required)
         return result
 
@@ -527,25 +538,25 @@ def _enforce_response_safety(
     if "candidate_spl" in required_keys:
         candidate = result.get("candidate_spl", "")
         if not isinstance(candidate, str) or not is_read_only_spl(candidate):
-            raise RuntimeError("Model proposed SPL containing an unsafe command.")
+            raise ModelResponseError("Model proposed SPL containing an unsafe command.")
         if not has_balanced_parens(candidate):
-            raise RuntimeError(
+            raise ModelResponseError(
                 "Model proposed SPL with unbalanced parentheses or quotes."
             )
     if "preservation_check_spl" in required_keys:
         check = result.get("preservation_check_spl", "")
         if not isinstance(check, str) or not is_read_only_spl(check):
-            raise RuntimeError(
+            raise ModelResponseError(
                 "Compiled must-preserve check contains an unsafe command."
             )
         if not has_balanced_parens(check):
-            raise RuntimeError(
+            raise ModelResponseError(
                 "Compiled must-preserve check has unbalanced parentheses or quotes."
             )
     if "diagnostic_searches" in required_keys:
         searches = result.get("diagnostic_searches", [])
         if not isinstance(searches, list):
-            raise RuntimeError("Diagnostic plan must be a list.")
+            raise ModelResponseError("Diagnostic plan must be a list.")
         for entry in searches:
             if not isinstance(entry, dict):
                 continue
@@ -553,11 +564,11 @@ def _enforce_response_safety(
             if not isinstance(spl, str):
                 continue
             if not is_read_only_spl(spl):
-                raise RuntimeError(
+                raise ModelResponseError(
                     "Diagnostic plan contains an unsafe SPL command."
                 )
             if not has_balanced_parens(spl):
-                raise RuntimeError(
+                raise ModelResponseError(
                     "Diagnostic plan contains SPL with unbalanced parentheses."
                 )
 

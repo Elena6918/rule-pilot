@@ -23,7 +23,7 @@ index=rulepilot_demo sourcetype=auth action=login
 ## Refined Rule
 
 ```spl
-search index=rulepilot_demo sourcetype=auth action=login status=failure user!="svc_*" reason!="mistyped_password"
+search index=rulepilot_demo sourcetype=auth action=login status=failure user!="svc_*" reason!="mistyped_password" reason!="expired_password"
 | bucket _time span=10m
 | stats count as failed_count by _time, user, src_ip
 | where failed_count >= 5
@@ -40,13 +40,13 @@ search index=rulepilot_demo sourcetype=auth action=login status=failure user!="s
 
 ## Analyst Interpretation
 
-The baseline is too noisy due to isolated typos and service account activity, which are not indicative of suspicious behavior.
+The baseline is too noisy due to isolated typos and service account activity, which are not indicative of attacks.
 
-Filter out service accounts and common mistyped password reasons, then aggregate failed logins over time to identify bursts. By excluding service accounts and common mistyped password reasons, we reduce noise. Aggregating over 10-minute windows helps identify repeated failed login bursts.
+Filter out service accounts and common benign reasons, then aggregate failed logins over time to detect bursts. By excluding service accounts and benign reasons, and focusing on repeated failures within a short time window, we reduce noise and highlight potential attacks.
 
-**Expected effect:** The result count will be significantly reduced, focusing on suspicious login bursts while excluding benign noise.
+**Expected effect:** The result count will be significantly reduced, focusing on genuine suspicious activity while excluding benign noise.
 
-**Risk:** There is a low risk of missing some legitimate failed login attempts, but the focus is on reducing noise and identifying true suspicious activity.
+**Risk:** There is a minimal risk of missing some edge cases of attacks if they do not meet the threshold, but the focus is on reducing false positives.
 
 ## Caveats
 
