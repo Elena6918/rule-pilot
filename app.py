@@ -13,6 +13,7 @@ that scenario from ``reports/samples/``.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from typing import Any
 import streamlit as st
 
 from src.agent import RulePilotAgent
+from src.models import build_model_client
 from src.reporting import compute_before_after_metrics, write_markdown_report
 from src.scenarios import (
     AUTH_FIELDS,
@@ -29,6 +31,14 @@ from src.scenarios import (
     custom_scenario,
 )
 from src.splunk_client import SplunkClient, SplunkClientError
+
+
+# UI model label → provider key understood by build_model_client.
+MODEL_PROVIDERS = {
+    "Frontier (OpenAI)": "openai",
+    "Local (Qwen)": "local",
+    "Splunk AI Assistant (MCP)": "splunk_ai",
+}
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -60,9 +70,11 @@ def run_scenario(
     earliest_time: str,
     latest_time: str,
     max_results: int,
+    provider: str,
 ) -> dict[str, Any]:
     client = SplunkClient.from_env()
-    agent = RulePilotAgent(client)
+    model_client = build_model_client(provider, index=client.index)
+    agent = RulePilotAgent(client, model_client=model_client)
     return agent.run(
         scenario,
         earliest_time=earliest_time,
@@ -314,17 +326,164 @@ def render_report(report: dict[str, Any]) -> None:
 # Tab orchestration
 # ---------------------------------------------------------------------------
 
+FIELD_SETS = {
+    "auth": AUTH_FIELDS,
+    "process": PROCESS_FIELDS,
+    "both": list(dict.fromkeys(AUTH_FIELDS + PROCESS_FIELDS)),
+}
+
+
+def _field_set_label(fields: list[str]) -> str:
+    if fields == AUTH_FIELDS:
+        return "auth"
+    if fields == PROCESS_FIELDS:
+        return "process"
+    return "both"
+
+
+def _rule_input_form(
+    *, key_prefix: str, defaults: dict[str, Any], provider: str
+) -> dict[str, Any]:
+    """Render the shared rule-input form and return the (possibly edited) values.
+
+    The same form drives all three tabs — the two hero tabs pre-fill it from a
+    curated scenario, the Custom tab pre-fills it with a worked example. This is
+    what an analyst fills in to get a refinement report.
+    """
+    # The compiled-check fields are driven through session_state so the
+    # "Generate from description" button can populate them; seed once.
+    spl_key = f"{key_prefix}_preserve_spl"
+    keys_key = f"{key_prefix}_preserve_keys"
+    st.session_state.setdefault(spl_key, defaults["preservation_check_spl"])
+    st.session_state.setdefault(keys_key, defaults["preservation_keys"])
+
+    baseline_spl = st.text_area(
+        "Baseline SPL",
+        value=defaults["baseline_spl"],
+        height=120,
+        key=f"{key_prefix}_spl",
+        placeholder="search index=<your_index> … — the noisy detection to tune",
+    )
+    context_hint = st.text_input(
+        "Context / goal (what kind of detection is this?)",
+        value=defaults["context_hint"],
+        key=f"{key_prefix}_context",
+        placeholder="e.g. Detect suspicious process execution, cutting routine admin noise",
+    )
+    must_preserve = st.text_input(
+        "Must-preserve behavior (the real suspicious activity the rule "
+        "MUST still catch after refinement)",
+        value=defaults["must_preserve"],
+        key=f"{key_prefix}_preserve",
+        placeholder="In plain English: what must the rule never stop catching?",
+    )
+
+    field_options = ["auth", "process", "both"]
+    field_set = st.selectbox(
+        "Available fields",
+        options=field_options,
+        index=field_options.index(defaults["field_set"]),
+        key=f"{key_prefix}_fields",
+    )
+
+    st.markdown(
+        "**Must-preserve check (the verification gate).** RulePilot runs this "
+        "search to learn which entities the refined rule MUST still surface, "
+        "then proves it covers ≥80% of them. Describe the behavior above in "
+        "plain English and let the model compile the SPL, or write/edit it "
+        "directly. Leave it blank to skip verification."
+    )
+    if st.button(
+        "Generate check from the description",
+        key=f"{key_prefix}_gen_check",
+    ):
+        try:
+            from src.agent import compile_preservation_check
+
+            client = SplunkClient.from_env()
+            with st.spinner("Compiling the must-preserve description to SPL…"):
+                spl, key_fields = compile_preservation_check(
+                    model_client=build_model_client(provider, index=client.index),
+                    splunk_client=client,
+                    must_preserve=must_preserve,
+                    baseline_spl=baseline_spl,
+                    available_fields=FIELD_SETS[field_set],
+                    index=client.index,
+                )
+            st.session_state[spl_key] = spl
+            st.session_state[keys_key] = ", ".join(key_fields)
+            st.success("Generated. Review and edit below, then press Run.")
+            st.rerun()
+        except SplunkClientError as exc:
+            st.error(f"Splunk error: {exc}")
+        except Exception as exc:
+            st.error(f"Could not generate the check: {exc}")
+
+    preservation_spl = st.text_area(
+        "Must-preserve check (SPL)",
+        height=120,
+        key=spl_key,
+        placeholder=(
+            "Click 'Generate check from the description' above, or paste a "
+            "read-only search ending in `| stats count by <key fields>`."
+        ),
+    )
+    preservation_keys_raw = st.text_input(
+        "Must-preserve key fields (comma-separated entity fields the check is "
+        "aggregated by)",
+        key=keys_key,
+        placeholder="e.g. user, src_ip",
+    )
+    return {
+        "baseline_spl": baseline_spl,
+        "context_hint": context_hint,
+        "must_preserve": must_preserve,
+        "preservation_check_spl": preservation_spl,
+        "preservation_key_fields": [
+            f.strip() for f in preservation_keys_raw.split(",") if f.strip()
+        ],
+        "available_fields": FIELD_SETS[field_set],
+    }
+
+
 def render_demo_tab(scenario_key: str, run_settings: dict[str, Any]) -> None:
-    scenario = build_scenario(scenario_key, index=_index_from_env())
-    st.markdown(f"**{scenario.title}**")
-    st.caption(scenario.context_hint)
-    with st.expander("Baseline SPL", expanded=False):
-        st.code(scenario.baseline_spl, language="text")
+    base = build_scenario(scenario_key, index=_index_from_env())
+    st.markdown(f"**{base.title}**")
+    st.caption(
+        "Pre-filled example — these are the inputs an analyst supplies. The same "
+        "form drives the Custom Rule tab; edit any field, or just press Run."
+    )
+
+    defaults = {
+        "baseline_spl": base.baseline_spl,
+        "context_hint": base.context_hint,
+        "must_preserve": base.must_preserve,
+        # The check SPL starts empty — the analyst generates it from the
+        # plain-English "Must-preserve behavior" above, or pastes their own.
+        "preservation_check_spl": "",
+        "preservation_keys": "",
+        "field_set": _field_set_label(base.available_fields),
+    }
+    values = _rule_input_form(
+        key_prefix=scenario_key,
+        defaults=defaults,
+        provider=run_settings["provider"],
+    )
 
     state_key = f"report_{scenario_key}"
-    run_clicked = st.button("Run", key=f"run_{scenario_key}", type="primary")
-
-    if run_clicked:
+    if st.button("Run", key=f"run_{scenario_key}", type="primary"):
+        # Keep the scenario's curated diagnostics, metric fields, and output path
+        # (reliability), but let the analyst-facing fields flow through from the
+        # form so the two hero tabs are genuinely the same interface as Custom.
+        scenario = dataclasses.replace(
+            base,
+            baseline_spl=values["baseline_spl"].strip(),
+            context_hint=values["context_hint"].strip(),
+            must_preserve=values["must_preserve"].strip(),
+            available_fields=values["available_fields"],
+            preservation_check_spl=values["preservation_check_spl"].strip() or None,
+            preservation_key_fields=values["preservation_key_fields"],
+        )
         report = _execute_or_replay(scenario, run_settings, state_key)
         if report is not None:
             st.session_state[state_key] = report
@@ -339,50 +498,36 @@ def render_demo_tab(scenario_key: str, run_settings: dict[str, Any]) -> None:
 def render_custom_tab(run_settings: dict[str, Any]) -> None:
     st.markdown("**Custom Rule** — bring your own baseline SPL.")
     st.caption(
-        "RulePilot will ask the LLM to plan diagnostic searches from your SPL, "
-        "run them, then propose a refined version."
+        "The same form as the two examples, blank for your own rule. RulePilot "
+        "plans diagnostics from your SPL, refines, then verifies against your "
+        "must-preserve check."
     )
 
-    default_spl = (
-        f"search index={_index_from_env()} event_type=process "
-        "command_line=*powershell*"
-    )
-    baseline_spl = st.text_area(
-        "Baseline SPL",
-        value=default_spl,
-        height=120,
-        key="custom_spl",
-    )
-    context_hint = st.text_input(
-        "Context / goal (what kind of detection is this?)",
-        value="Detect suspicious PowerShell activity, reducing noise from routine admin scripts.",
-        key="custom_context",
-    )
-    must_preserve = st.text_input(
-        "Must-preserve behavior (the real suspicious activity the rule "
-        "MUST still catch after refinement)",
-        value="Encoded PowerShell commands and reverse-shell indicators.",
-        key="custom_preserve",
-    )
-    field_set = st.selectbox(
-        "Available fields",
-        options=["auth", "process", "both"],
-        index=2,
-        key="custom_fields",
+    # The custom tab is "bring your own rule" — every field starts blank and is
+    # guided by placeholder text in the shared form.
+    defaults = {
+        "baseline_spl": "",
+        "context_hint": "",
+        "must_preserve": "",
+        "preservation_check_spl": "",
+        "preservation_keys": "",
+        "field_set": "both",
+    }
+    values = _rule_input_form(
+        key_prefix="custom",
+        defaults=defaults,
+        provider=run_settings["provider"],
     )
 
     if st.button("Run", key="run_custom", type="primary"):
-        available_fields = {
-            "auth": AUTH_FIELDS,
-            "process": PROCESS_FIELDS,
-            "both": list(dict.fromkeys(AUTH_FIELDS + PROCESS_FIELDS)),
-        }[field_set]
         scenario = custom_scenario(
-            index=_index_from_env(),
-            baseline_spl=baseline_spl,
-            context_hint=context_hint,
-            must_preserve=must_preserve,
-            available_fields=available_fields,
+            index=idx,
+            baseline_spl=values["baseline_spl"],
+            context_hint=values["context_hint"],
+            must_preserve=values["must_preserve"],
+            available_fields=values["available_fields"],
+            preservation_check_spl=values["preservation_check_spl"],
+            preservation_key_fields=values["preservation_key_fields"],
         )
         report = _execute_or_replay(scenario, run_settings, "report_custom")
         if report is not None:
@@ -419,6 +564,7 @@ def _execute_or_replay(
                 earliest_time=run_settings["earliest_time"],
                 latest_time=run_settings["latest_time"],
                 max_results=run_settings["max_results"],
+                provider=run_settings["provider"],
             )
         except SplunkClientError as exc:
             st.error(f"Splunk error: {exc}")
@@ -462,6 +608,17 @@ def main() -> None:
             step=100,
         )
 
+        provider_label = st.selectbox(
+            "Model",
+            options=list(MODEL_PROVIDERS.keys()),
+            index=0,
+            help=(
+                "Which model powers diagnostics, refinement, and the "
+                "natural-language → SPL must-preserve compiler. A misconfigured "
+                "or unreachable model surfaces a clear error on Run."
+            ),
+        )
+
         st.divider()
         st.subheader("Splunk MCP")
         st.caption(
@@ -476,6 +633,7 @@ def main() -> None:
         "earliest_time": earliest_time,
         "latest_time": latest_time,
         "max_results": int(max_results),
+        "provider": MODEL_PROVIDERS[provider_label],
     }
 
     tab1, tab2, tab3 = st.tabs(

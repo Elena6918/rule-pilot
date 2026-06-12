@@ -107,13 +107,19 @@ def failed_login_scenario(index: str) -> Scenario:
         ),
     }
 
+    # Must-preserve = the behavioral signature of a genuine brute-force attack:
+    # a sustained run of failed logins from one source against one account. In
+    # the UI the analyst states this intent in plain English and the agent
+    # compiles it to SPL; this is the equivalent executable oracle used by the
+    # CLI / Replay path. It is NOT the refined rule — the refined rule must add
+    # the noise reduction (e.g. dropping service accounts) the agent discovers.
     preservation_spl = (
         f"search index={index} event_type=auth action=login "
         "(status=failed OR status=failure)\n"
         "| bucket _time span=10m\n"
         "| stats count as failed_count by _time, user, src_ip\n"
         "| where failed_count >= 5\n"
-        "| stats values(_time) as windows by user, src_ip"
+        "| stats count by user, src_ip"
     )
 
     return Scenario(
@@ -126,8 +132,10 @@ def failed_login_scenario(index: str) -> Scenario:
             "and routine service-account churn."
         ),
         must_preserve=(
-            "Suspicious burst behavior: repeated failed logins (>=5 in 10 minutes) "
-            "from the same user/source-IP pair."
+            "Genuine brute-force or password-spray attempts: a single source "
+            "repeatedly failing to log into an account over a short period. These "
+            "must keep firing — isolated typos and routine service-account churn "
+            "are noise, not attacks."
         ),
         available_fields=AUTH_FIELDS,
         refined_spl_output_path=str(
@@ -250,7 +258,15 @@ def custom_scenario(
     context_hint: str,
     must_preserve: str,
     available_fields: list[str] | None = None,
+    preservation_check_spl: str | None = None,
+    preservation_key_fields: list[str] | None = None,
 ) -> Scenario:
+    # When the analyst supplies a must-preserve check (an SPL search returning the
+    # entities that MUST still be caught) plus the key fields to identify them,
+    # the same preservation gate the demo scenarios use runs on the custom rule.
+    # If either is omitted, the gate is skipped and must-preserve stays advisory.
+    preservation_spl = (preservation_check_spl or "").strip() or None
+    key_fields = [f.strip() for f in (preservation_key_fields or []) if f.strip()]
     return Scenario(
         key="custom",
         title="Custom Rule",
@@ -264,6 +280,8 @@ def custom_scenario(
         diagnostic_searches=None,
         metric_fields=[],
         burst_diagnostic_name=None,
+        preservation_check_spl=preservation_spl,
+        preservation_key_fields=key_fields,
     )
 
 

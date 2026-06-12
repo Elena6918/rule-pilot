@@ -2,7 +2,7 @@
   "baseline_result_count": 113,
   "baseline_spl": "index=rulepilot_demo sourcetype=auth action=login\n| stats count by user, src_ip, status\n| sort - count",
   "burst_diagnostic_name": "suspicious_failed_login_bursts",
-  "diagnosis_text": "The baseline matches too many events, including isolated typos and service account activity. The goal is to reduce noise while preserving suspicious burst behavior.",
+  "diagnosis_text": "The baseline is too noisy due to isolated typos and service account activity, which are not indicative of attacks.",
   "diagnostic_results": {
     "count_by_reason": {
       "result_count": 6,
@@ -160,11 +160,13 @@
       "spl": "search index=rulepilot_demo event_type=auth action=login (status=failed OR status=failure)\n| bucket _time span=10m\n| stats count as failed_count values(reason) as reasons values(app) as apps by _time src_ip user\n| where failed_count >= 5\n| sort - failed_count\n| head 20"
     }
   },
-  "expected_effect": "The result count will be significantly reduced while still preserving suspicious burst behavior.",
+  "expected_effect": "The result count will be significantly reduced, focusing on genuine suspicious activity while excluding benign noise.",
+  "final_status": "accepted",
+  "final_status_is_accepted": true,
   "iterations": [
     {
       "attempt": 1,
-      "candidate_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
+      "candidate_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\" reason!=\"mistyped_password\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
       "feedback": "Candidate reduced rows by 99.1% (113 \u2192 1). Preserved 100.0% of must-catch entities.",
       "preservation_pct": 100.0,
       "refined_result_count": 1,
@@ -179,11 +181,11 @@
   "must_preserve_total": 1,
   "preservation_pct": 100.0,
   "refined_result_count": 1,
-  "refined_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
+  "refined_spl": "search index=rulepilot_demo sourcetype=auth action=login status=failure user!=\"svc_*\" reason!=\"mistyped_password\"\n| bucket _time span=10m\n| stats count as failed_count by _time, user, src_ip\n| where failed_count >= 5",
   "refined_spl_output_path": "/Users/elena/Desktop/rule-pilot/detections/failed_login_refined.spl",
-  "refinement_rationale": "Filter out service accounts, aggregate by time window, and filter for repeated bursts of failed logins. This refinement filters out service accounts, time-buckets the events, aggregates per user+src_ip, and only surfaces repeated bursts (>=5 failures in 10 minutes).",
-  "refinement_strategy": "Filter out service accounts, aggregate by time window, and filter for repeated bursts of failed logins.",
-  "risk": "There is a slight risk of missing very short-lived bursts, but this should be minimal given the 10-minute window.",
+  "refinement_rationale": "Filter out service accounts and focus on repeated failures within a short time window. By excluding service accounts and mistyped passwords, and focusing on repeated failures within a 10-minute window, we reduce noise and highlight potential attacks.",
+  "refinement_strategy": "Filter out service accounts and focus on repeated failures within a short time window.",
+  "risk": "There is a low risk of missing genuine attacks if they do not meet the threshold of repeated failures within the specified time window.",
   "scenario": "failed_login",
   "scenario_title": "Failed Login Burst Refinement",
   "signals": {

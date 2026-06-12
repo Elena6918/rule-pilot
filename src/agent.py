@@ -16,6 +16,7 @@ try:
     )
     from src.prompts import (
         build_diagnostic_planning_prompt,
+        build_preservation_compilation_prompt,
         build_refinement_prompt,
     )
     from src.scenarios import Scenario, failed_login_scenario
@@ -28,7 +29,11 @@ except ModuleNotFoundError:
         is_read_only_spl,
         model_client_from_env,
     )
-    from prompts import build_diagnostic_planning_prompt, build_refinement_prompt
+    from prompts import (
+        build_diagnostic_planning_prompt,
+        build_preservation_compilation_prompt,
+        build_refinement_prompt,
+    )
     from scenarios import Scenario, failed_login_scenario
     from signals import compute_signals, render_signal_block
     from splunk_client import SplunkClient
@@ -165,6 +170,10 @@ class RulePilotAgent:
                 "diagnostic searches."
             )
 
+        # Diagnostics are characterization, not the deliverable — so a single
+        # malformed planned diagnostic (the local model occasionally emits one)
+        # should not abort the whole run. Skip invalid/unsafe entries and keep
+        # the valid ones; only fail if nothing usable survives.
         plan: dict[str, str] = {}
         for entry in searches:
             if not isinstance(entry, dict):
@@ -175,19 +184,17 @@ class RulePilotAgent:
                 continue
             spl = spl.strip()
             if not is_read_only_spl(spl):
-                raise RuntimeError(
-                    f"Planned diagnostic {name!r} contains an unsafe SPL command."
-                )
-            parser_ok, parser_error = self.client.validate_spl(spl)
+                continue
+            parser_ok, _parser_error = self.client.validate_spl(spl)
             if not parser_ok:
-                raise RuntimeError(
-                    f"Planned diagnostic {name!r} failed Splunk SPL parser: "
-                    f"{parser_error or 'unknown error'}"
-                )
+                continue
             plan[name] = spl
 
         if not plan:
-            raise RuntimeError("Diagnostic plan was empty after validation.")
+            raise RuntimeError(
+                "Diagnostic planning produced no valid searches "
+                "(all candidates were unsafe or failed Splunk's SPL parser)."
+            )
         return plan
 
     def _run_diagnostics(
@@ -647,6 +654,56 @@ def _format_missing_keys(
     if len(missing) > 5:
         summary += f"; (+{len(missing) - 5} more)"
     return summary
+
+
+def compile_preservation_check(
+    *,
+    model_client: ModelClient,
+    splunk_client: SplunkClient,
+    must_preserve: str,
+    baseline_spl: str,
+    available_fields: list[str],
+    index: str,
+) -> tuple[str, list[str]]:
+    """Compile a natural-language must-preserve statement into an executable
+    preservation-check SPL plus its key fields.
+
+    The analyst describes what must stay caught in plain English; the model
+    compiles it to a read-only SPL oracle, which we pre-flight against Splunk's
+    own parser before handing it back for the analyst to review. Raises
+    RuntimeError with a human-readable reason on any failure.
+    """
+    if not must_preserve.strip():
+        raise RuntimeError("Describe what must be preserved before generating a check.")
+
+    messages = build_preservation_compilation_prompt(
+        must_preserve=must_preserve,
+        baseline_spl=baseline_spl,
+        available_fields=available_fields,
+        index=index,
+    )
+    result = model_client.generate_json(messages)
+
+    spl = str(result.get("preservation_check_spl") or "").strip()
+    raw_keys = result.get("preservation_key_fields") or []
+    if isinstance(raw_keys, str):
+        raw_keys = raw_keys.split(",")
+    key_fields = [str(k).strip() for k in raw_keys if str(k).strip()]
+
+    if not spl:
+        raise RuntimeError("The model returned an empty preservation check.")
+    if not key_fields:
+        raise RuntimeError("The model did not return any key fields.")
+    if not is_read_only_spl(spl):
+        raise RuntimeError("The compiled check contains an unsafe SPL command.")
+
+    parser_ok, parser_error = splunk_client.validate_spl(spl)
+    if not parser_ok:
+        raise RuntimeError(
+            f"Splunk's parser rejected the compiled check: "
+            f"{parser_error or 'unknown error'}"
+        )
+    return spl, key_fields
 
 
 def _detect_spl_syntax_issue(spl: str) -> str | None:

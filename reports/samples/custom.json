@@ -1,0 +1,281 @@
+{
+  "baseline_result_count": 29,
+  "baseline_spl": "search index=rulepilot_demo event_type=process command_line=*powershell*",
+  "burst_diagnostic_name": null,
+  "diagnosis_text": "Most PowerShell commands are routine and do not involve suspicious activity.",
+  "diagnostic_results": {
+    "command_line_patterns": {
+      "result_count": 29,
+      "rows": [
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -EncodedCommand SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoA..."
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\backup_rotate.ps1"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\backup_rotate.ps1"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\backup_rotate.ps1"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\backup_rotate.ps1"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -File C:\\Scripts\\health_check.ps1"
+        },
+        {
+          "command_line": "powershell.exe -nop -w hidden -enc JABjAD0ATgBlAHcALQBPAGIA..."
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -EncodedCommand SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoA..."
+        },
+        {
+          "command_line": "powershell.exe -Command Get-Process"
+        },
+        {
+          "command_line": "powershell.exe -EncodedCommand SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoA..."
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=process command_line=*powershell* | table command_line"
+    },
+    "geo_location": {
+      "result_count": 0,
+      "rows": [],
+      "spl": "search index=rulepilot_demo event_type=process command_line=*powershell* | stats count by geo"
+    },
+    "parent_process_analysis": {
+      "result_count": 29,
+      "rows": [
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "outlook.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "svchost.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "svchost.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "svchost.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "svchost.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "cmd.exe"
+        },
+        {
+          "parent_process": "winword.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "outlook.exe"
+        },
+        {
+          "parent_process": "explorer.exe"
+        },
+        {
+          "parent_process": "outlook.exe"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=process command_line=*powershell* | table parent_process"
+    },
+    "top_users": {
+      "result_count": 7,
+      "rows": [
+        {
+          "count": "7",
+          "user": "alice"
+        },
+        {
+          "count": "5",
+          "user": "bob"
+        },
+        {
+          "count": "6",
+          "user": "carol"
+        },
+        {
+          "count": "7",
+          "user": "dave"
+        },
+        {
+          "count": "1",
+          "user": "svc_backup"
+        },
+        {
+          "count": "1",
+          "user": "svc_ci"
+        },
+        {
+          "count": "2",
+          "user": "svc_deploy"
+        }
+      ],
+      "spl": "search index=rulepilot_demo event_type=process command_line=*powershell* | stats count by user"
+    }
+  },
+  "expected_effect": "The result count will be reduced while still preserving encoded command lines and reverse-shell indicators.",
+  "final_status": "parser_rejected",
+  "final_status_is_accepted": false,
+  "iterations": [
+    {
+      "attempt": 1,
+      "candidate_spl": "search index=rulepilot_demo event_type=process command_line=*powershell* | where user !=\"alice\" AND user !=\"bob\" AND user !=\"carol\" AND user !=\"dave\" AND user !=\"svc_backup\" | bucket _time span=10m | stats count as suspicious_count by _time, user, src_ip, command_line | where suspicious_count >= 2",
+      "feedback": "Your candidate returned 0 result rows, but the baseline returned 29. This is too aggressive. Loosen the filter so the rule still surfaces the behavior under 'Must preserve' but with materially fewer rows than baseline.",
+      "preservation_pct": 100.0,
+      "refined_result_count": 0,
+      "verdict": "too_tight"
+    },
+    {
+      "attempt": 2,
+      "candidate_spl": "search index=rulepilot_demo event_type=process command_line=*powershell* | where command_line !~ \"^(Get-Process|Invoke-WebRequest|New-Item|Remove-Item|Set-Content)\" | bucket _time span=1h | stats count as power_shell_count by user, src_ip",
+      "feedback": "Splunk's SPL parser rejected your candidate. Parser error: Error in 'where' command: The expression is malformed. Expected =.. Rewrite the pipeline using valid SPL only.",
+      "preservation_pct": null,
+      "refined_result_count": null,
+      "verdict": "parser_rejected"
+    },
+    {
+      "attempt": 3,
+      "candidate_spl": "search index=rulepilot_demo event_type=process command_line=*powershell* | where command_line !~ \"-EncodedCommand\" AND command_line !~ \"-Command Get-Process\" AND command_line !~ \"-File C:\\Scripts\\health_check.ps1\" AND command_line !~ \"-File C:\\Scripts\\backup_rotate.ps1\" | bucket _time span=10m | stats count as suspicious_count by user, src_ip | where suspicious_count >= 2",
+      "feedback": "Splunk's SPL parser rejected your candidate. Parser error: Error in 'where' command: The expression is malformed. Expected =.. Rewrite the pipeline using valid SPL only.",
+      "preservation_pct": null,
+      "refined_result_count": null,
+      "verdict": "parser_rejected"
+    }
+  ],
+  "metric_fields": [],
+  "must_preserve_total": 7,
+  "preservation_pct": null,
+  "refined_result_count": null,
+  "refined_spl": "search index=rulepilot_demo event_type=process command_line=*powershell* | where command_line !~ \"-EncodedCommand\" AND command_line !~ \"-Command Get-Process\" AND command_line !~ \"-File C:\\Scripts\\health_check.ps1\" AND command_line !~ \"-File C:\\Scripts\\backup_rotate.ps1\" | bucket _time span=10m | stats count as suspicious_count by user, src_ip | where suspicious_count >= 2",
+  "refined_spl_output_path": "/Users/elena/Desktop/rule-pilot/detections/custom_refined.spl",
+  "refinement_rationale": "Filter out common, non-suspicious command patterns and aggregate by user to identify repeated suspicious activities. This refinement removes common, non-suspicious PowerShell commands and aggregates the remaining events to identify repeated suspicious activities.",
+  "refinement_strategy": "Filter out common, non-suspicious command patterns and aggregate by user to identify repeated suspicious activities.",
+  "risk": "Some routine PowerShell activity may be missed, but this is a trade-off for reducing noise.",
+  "scenario": "custom",
+  "scenario_title": "Custom Rule",
+  "signals": {
+    "insights": [
+      "Baseline matches 29 result rows."
+    ],
+    "raw": {
+      "baseline_count": 29
+    }
+  }
+}

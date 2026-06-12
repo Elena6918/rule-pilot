@@ -150,29 +150,31 @@ class SplunkClient:
         normalized = self._normalize_search_spl(spl)
         url = f"{self.base_url}/services/search/parser"
 
+        # Splunk's parser endpoint requires POST with the query in the form body.
+        # A GET (or POST with the query in the URL query string) returns HTTP 405
+        # "The method is not allowed." / 400 "Invalid query." — which would
+        # masquerade as a parse failure and falsely reject every candidate.
+        form_data = {
+            "q": normalized,
+            "parse_only": "true",
+            "output_mode": "json",
+        }
+
         try:
             if not self.verify_ssl:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", InsecureRequestWarning)
-                    response = requests.get(
+                    response = requests.post(
                         url,
-                        params={
-                            "q": normalized,
-                            "parse_only": "true",
-                            "output_mode": "json",
-                        },
+                        data=form_data,
                         auth=self.auth,
                         verify=self.verify_ssl,
                         timeout=self.timeout,
                     )
             else:
-                response = requests.get(
+                response = requests.post(
                     url,
-                    params={
-                        "q": normalized,
-                        "parse_only": "true",
-                        "output_mode": "json",
-                    },
+                    data=form_data,
                     auth=self.auth,
                     timeout=self.timeout,
                 )

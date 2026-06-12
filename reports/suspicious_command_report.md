@@ -23,11 +23,9 @@ index=rulepilot_demo event_type=process command_line="*powershell*" OR command_l
 ## Refined Rule
 
 ```spl
-search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) user!="svc_*" parent_process IN ("bash", "cmd.exe", "python3")
-| bucket _time span=10m
-| stats count as suspicious_count by _time, process, user, parent_process, command_line
-| where suspicious_count >= 5
-| sort - suspicious_count
+search index=rulepilot_demo event_type=process (command_line="*powershell* -EncodedCommand*" OR command_line="*curl* | *sh*" OR command_line="*wget* | *sh*" OR command_line="*base64* -d*" OR command_line="*/dev/tcp/*") user!="svc_*"
+| table _time, host, user, process, parent_process, command_line
+| sort - _time
 ```
 
 ## Before/After Metrics
@@ -35,19 +33,19 @@ search index=rulepilot_demo event_type=process (command_line=*powershell* OR com
 | Metric | Value |
 | --- | --- |
 | Baseline result rows | 122 |
-| Refined result rows | N/A |
-| Absolute reduction | N/A |
-| Percent reduction | N/A |
+| Refined result rows | 12 |
+| Absolute reduction | 110 |
+| Percent reduction | 90.2% |
 
 ## Analyst Interpretation
 
-Baseline triggers constantly on admins, CI jobs, and routine scripts. Need to reduce noise while preserving high-risk execution patterns.
+The baseline SPL is too broad, capturing routine admin and service account activity.
 
-Aggregate by time window, filter out service accounts, and focus on specific command-line patterns. Filters out service accounts and common parent processes. Aggregates events over time to identify repeated bursts of suspicious activity.
+Filter out service accounts and focus on high-risk command patterns. This refinement targets specific high-risk patterns and excludes service accounts, reducing noise.
 
-**Expected effect:** Reduces false positives by filtering out benign noise while still surfacing high-risk execution patterns.
+**Expected effect:** The result count should decrease significantly, focusing on truly suspicious activity.
 
-**Risk:** May miss occasional isolated incidents, but should reduce overall noise.
+**Risk:** Low risk of missing true positives as the refinement still captures high-risk patterns.
 
 ## Caveats
 

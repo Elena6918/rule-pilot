@@ -2,7 +2,7 @@
   "baseline_result_count": 122,
   "baseline_spl": "index=rulepilot_demo event_type=process command_line=\"*powershell*\" OR command_line=\"*curl*\" OR command_line=\"*wget*\" OR command_line=\"*base64*\"\n| table _time, host, user, process, parent_process, command_line\n| sort - _time",
   "burst_diagnostic_name": "suspicious_command_clusters",
-  "diagnosis_text": "Baseline triggers constantly on admins, CI jobs, and routine scripts. Need to reduce noise while preserving high-risk execution patterns.",
+  "diagnosis_text": "The baseline SPL is too broad, capturing routine admin and service account activity.",
   "diagnostic_results": {
     "count_by_command_pattern": {
       "result_count": 6,
@@ -288,33 +288,17 @@
       "spl": "search index=rulepilot_demo event_type=process\n| eval is_encoded=if(like(lower(command_line), \"%-enc %\") OR like(lower(command_line), \"%encodedcommand%\"), 1, 0)\n| eval is_pipe_shell=if(like(lower(command_line), \"%curl%sh%\") OR like(lower(command_line), \"%curl%bash%\") OR like(lower(command_line), \"%wget%sh%\") OR like(lower(command_line), \"%wget%bash%\"), 1, 0)\n| eval is_revshell=if(like(command_line, \"%/dev/tcp/%\"), 1, 0)\n| where is_encoded=1 OR is_pipe_shell=1 OR is_revshell=1\n| stats count as suspicious_count values(process) as processes values(parent_process) as parents by user host\n| sort - suspicious_count\n| head 20"
     }
   },
-  "expected_effect": "Reduces false positives by filtering out benign noise while still surfacing high-risk execution patterns.",
-  "final_status": "parser_rejected",
-  "final_status_is_accepted": false,
+  "expected_effect": "The result count should decrease significantly, focusing on truly suspicious activity.",
+  "final_status": "accepted",
+  "final_status_is_accepted": true,
   "iterations": [
     {
       "attempt": 1,
-      "candidate_spl": "search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) AND NOT (user STARTSWITH \"svc_\")\n| bucket _time span=10m\n| stats count as suspicious_count by user, process, parent_process, command_line\n| where suspicious_count >= 5\n| sort - suspicious_count",
-      "feedback": "Splunk's SPL parser rejected your candidate. Parser error: The method is not allowed.. Rewrite the pipeline using valid SPL only.",
+      "candidate_spl": "search index=rulepilot_demo event_type=process (command_line=\"*powershell* -EncodedCommand*\" OR command_line=\"*curl* | *sh*\" OR command_line=\"*wget* | *sh*\" OR command_line=\"*base64* -d*\" OR command_line=\"*/dev/tcp/*\") user!=\"svc_*\"\n| table _time, host, user, process, parent_process, command_line\n| sort - _time",
+      "feedback": "Candidate reduced rows by 90.2% (122 \u2192 12).",
       "preservation_pct": null,
-      "refined_result_count": null,
-      "verdict": "parser_rejected"
-    },
-    {
-      "attempt": 2,
-      "candidate_spl": "search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) user!=\"svc_*\" parent_process IN (\"bash\", \"cmd.exe\", \"python3\")\n| bucket _time span=10m\n| stats count as suspicious_count by _time, process, user, parent_process, command_line\n| where suspicious_count >= 5\n| sort - suspicious_count",
-      "feedback": "Splunk's SPL parser rejected your candidate. Parser error: The method is not allowed.. Rewrite the pipeline using valid SPL only.",
-      "preservation_pct": null,
-      "refined_result_count": null,
-      "verdict": "parser_rejected"
-    },
-    {
-      "attempt": 3,
-      "candidate_spl": "search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) user!=\"svc_*\" parent_process IN (\"bash\", \"cmd.exe\", \"python3\")\n| bucket _time span=10m\n| stats count as suspicious_count by _time, process, user, parent_process, command_line\n| where suspicious_count >= 5\n| sort - suspicious_count",
-      "feedback": "Splunk's SPL parser rejected your candidate. Parser error: The method is not allowed.. Rewrite the pipeline using valid SPL only.",
-      "preservation_pct": null,
-      "refined_result_count": null,
-      "verdict": "parser_rejected"
+      "refined_result_count": 12,
+      "verdict": "accepted"
     }
   ],
   "metric_fields": [
@@ -322,14 +306,14 @@
     "user",
     "parent_process"
   ],
-  "must_preserve_total": 13,
+  "must_preserve_total": 19,
   "preservation_pct": null,
-  "refined_result_count": null,
-  "refined_spl": "search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) user!=\"svc_*\" parent_process IN (\"bash\", \"cmd.exe\", \"python3\")\n| bucket _time span=10m\n| stats count as suspicious_count by _time, process, user, parent_process, command_line\n| where suspicious_count >= 5\n| sort - suspicious_count",
+  "refined_result_count": 12,
+  "refined_spl": "search index=rulepilot_demo event_type=process (command_line=\"*powershell* -EncodedCommand*\" OR command_line=\"*curl* | *sh*\" OR command_line=\"*wget* | *sh*\" OR command_line=\"*base64* -d*\" OR command_line=\"*/dev/tcp/*\") user!=\"svc_*\"\n| table _time, host, user, process, parent_process, command_line\n| sort - _time",
   "refined_spl_output_path": "/Users/elena/Desktop/rule-pilot/detections/suspicious_command_refined.spl",
-  "refinement_rationale": "Aggregate by time window, filter out service accounts, and focus on specific command-line patterns. Filters out service accounts and common parent processes. Aggregates events over time to identify repeated bursts of suspicious activity.",
-  "refinement_strategy": "Aggregate by time window, filter out service accounts, and focus on specific command-line patterns.",
-  "risk": "May miss occasional isolated incidents, but should reduce overall noise.",
+  "refinement_rationale": "Filter out service accounts and focus on high-risk command patterns. This refinement targets specific high-risk patterns and excludes service accounts, reducing noise.",
+  "refinement_strategy": "Filter out service accounts and focus on high-risk command patterns.",
+  "risk": "Low risk of missing true positives as the refinement still captures high-risk patterns.",
   "scenario": "suspicious_command",
   "scenario_title": "Suspicious Command Execution",
   "signals": {

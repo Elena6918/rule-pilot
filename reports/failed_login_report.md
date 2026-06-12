@@ -23,7 +23,7 @@ index=rulepilot_demo sourcetype=auth action=login
 ## Refined Rule
 
 ```spl
-search index=rulepilot_demo sourcetype=auth action=login status=failure user!="svc_*"
+search index=rulepilot_demo sourcetype=auth action=login status=failure user!="svc_*" reason!="mistyped_password"
 | bucket _time span=10m
 | stats count as failed_count by _time, user, src_ip
 | where failed_count >= 5
@@ -40,13 +40,13 @@ search index=rulepilot_demo sourcetype=auth action=login status=failure user!="s
 
 ## Analyst Interpretation
 
-The baseline matches too many events, including isolated typos and service account activity. The goal is to reduce noise while preserving suspicious burst behavior.
+The baseline is too noisy due to isolated typos and service account activity, which are not indicative of suspicious behavior.
 
-Filter out service accounts, aggregate by time window, and filter for repeated bursts of failed logins. This refinement filters out service accounts, time-buckets the events, aggregates per user+src_ip, and only surfaces repeated bursts (>=5 failures in 10 minutes).
+Filter out service accounts and common mistyped password reasons, then aggregate failed logins over time to identify bursts. By excluding service accounts and common mistyped password reasons, we reduce noise. Aggregating over 10-minute windows helps identify repeated failed login bursts.
 
-**Expected effect:** The result count will be significantly reduced while still preserving suspicious burst behavior.
+**Expected effect:** The result count will be significantly reduced, focusing on suspicious login bursts while excluding benign noise.
 
-**Risk:** There is a slight risk of missing very short-lived bursts, but this should be minimal given the 10-minute window.
+**Risk:** There is a low risk of missing some legitimate failed login attempts, but the focus is on reducing noise and identifying true suspicious activity.
 
 ## Caveats
 

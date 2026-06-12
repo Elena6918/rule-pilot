@@ -17,8 +17,14 @@ REFINEMENT_REQUIRED_KEYS = [
 
 DIAGNOSTIC_PLAN_REQUIRED_KEYS = ["diagnostic_searches"]
 
+PRESERVATION_COMPILE_REQUIRED_KEYS = [
+    "preservation_check_spl",
+    "preservation_key_fields",
+]
+
 TASK_MARKER_REFINEMENT = "RULEPILOT_TASK: refinement"
 TASK_MARKER_DIAGNOSTIC_PLAN = "RULEPILOT_TASK: diagnostic_planning"
+TASK_MARKER_PRESERVATION_COMPILE = "RULEPILOT_TASK: preservation_compilation"
 
 SHARED_SAFETY_RULES = """
 You must only propose read-only SPL.
@@ -190,6 +196,63 @@ Expected JSON schema:
     ]
 
 
+def build_preservation_compilation_prompt(
+    *,
+    must_preserve: str,
+    baseline_spl: str,
+    available_fields: list[str],
+    index: str,
+) -> list[dict[str, str]]:
+    """Compile an analyst's natural-language must-preserve statement into an
+    executable preservation-check SPL + key fields.
+
+    The output is a *verification oracle* — the search RulePilot runs to learn
+    which entities the refined rule must still surface — NOT a tuned detection
+    rule. It should capture the must-catch behavior generously and end by
+    aggregating to one row per entity.
+    """
+    system_prompt = f"""
+You are a SOC detection engineer. Compile the analyst's natural-language "must preserve" statement into ONE read-only Splunk SPL search that returns the entities that MUST still be caught after a noisy rule is tuned.
+This is a VERIFICATION ORACLE, not a tuned detection rule: capture the must-catch behavior generously and reliably so RulePilot can later prove a refined rule still covers it. Do NOT pre-optimize for low false positives — that is the refined rule's job, not the oracle's.
+{SHARED_SAFETY_RULES}
+{SPL_IDIOM_RULES}
+The search must target index={index}, use only the available fields, and END with `| stats count by <key fields>` so each output row identifies one must-catch entity.
+{TASK_MARKER_PRESERVATION_COMPILE}
+""".strip()
+
+    expected_schema = {
+        "preservation_check_spl": "read-only SPL ending in `| stats count by <key fields>`",
+        "preservation_key_fields": ["field", "..."],
+    }
+
+    sections = [
+        f"Target index: {index}",
+        f"Available fields: {json.dumps(available_fields)}",
+        "",
+        "Baseline SPL (the noisy rule being tuned — for schema/context only):",
+        baseline_spl,
+        "",
+        "Must preserve (analyst's words):",
+        must_preserve,
+        "",
+        "Return strict JSON matching this schema:",
+        json.dumps(expected_schema, indent=2),
+        "",
+        "Rules for preservation_check_spl:",
+        f"- Must target index={index} and be read-only",
+        "- Must END with `| stats count by <the key fields>` (one row per must-catch entity)",
+        "- Use only the available fields listed above",
+        "- preservation_key_fields must list exactly those key fields, e.g. [\"user\", \"src_ip\"]",
+    ]
+
+    user_prompt = "\n".join(sections).strip()
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 def parse_model_json_response(
     text: str,
     *,
@@ -234,6 +297,8 @@ def detect_task_marker(messages: list[dict[str, str]]) -> str | None:
             return "refinement"
         if TASK_MARKER_DIAGNOSTIC_PLAN in content:
             return "diagnostic_planning"
+        if TASK_MARKER_PRESERVATION_COMPILE in content:
+            return "preservation_compilation"
     return None
 
 
