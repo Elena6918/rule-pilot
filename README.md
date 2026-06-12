@@ -1,529 +1,266 @@
 # RulePilot
 
-RulePilot is an analyst-in-the-loop agent that **reduces false positives in noisy Splunk detection rules without dropping the real suspicious events analysts care about.**
+**An analyst-in-the-loop agent that cuts false-positive volume on noisy Splunk
+detections by 80%+ — and *proves* the tightened rule still catches what matters
+before it ships.**
 
-It runs a baseline SPL search against Splunk data, plans diagnostic searches that explain *why* the rule is noisy, asks an LLM to propose a refined SPL, validates the refinement against a "must-preserve" signal set, and iterates if the candidate either fails to reduce noise OR drops too many of the events the analyst marked as critical — all behind a Streamlit UI with one tab per scenario.
+> Splunk Agentic Ops Hackathon · **Security** track · MIT-licensed
 
----
+Alert fatigue is the #1 SOC pain: analysts drown in false positives long before
+a missed detection ever surfaces. The usual fix — hand-tuning a noisy rule — is
+slow and risky, because a tighter rule can silently stop catching real attacks.
+RulePilot automates the tuning **and the safety proof**:
 
-## Project Summary
+1. The analyst pastes a noisy rule and says, in **plain English**, what it must
+   never stop catching.
+2. RulePilot diagnoses *why* the rule is noisy (live Splunk searches), and an
+   AI model proposes a tighter rule.
+3. Before accepting, RulePilot **verifies** the tighter rule still surfaces the
+   must-catch behavior — and **refuses to ship a regression**.
 
-**Project name:** RulePilot
-**Hackathon track:** Security
-**Core idea:** Help SOC analysts cut alert volume on noisy detections without losing the signal they actually care about.
-
-False positives are the dominant SOC pain point — analysts drown in alerts before missed detections become visible. RulePilot's framing is deliberately narrow: it is a **false-positive reducer** with a built-in preservation check, not a general detection-engineering autopilot. Coverage expansion (catching things the rule currently misses) is future work.
-
-RulePilot does **not** claim to autonomously produce the perfect detection rule. It produces an analyst-reviewable recommendation with:
-
-- original SPL
-- diagnostic SPL results
-- recommended revised SPL
-- intent / refinement strategy
-- expected effect and risk
-- before/after comparison
+It's not a model that writes detections. It's an agent that reduces alert noise
+**and proves it didn't break the detection.**
 
 ---
 
-## Current Status
+## Demo results (verified, live Splunk + GPT-4o)
 
-| Piece | State |
-| --- | --- |
-| Synthetic log generator (auth + process-execution events) | done |
-| Splunk client (REST API, search job polling) | done |
-| Scenario framework (`Scenario` dataclass, generic agent loop) | done |
-| LLM-driven refinement (OpenAI-compatible endpoint) | done |
-| LLM-driven diagnostic planning (custom-rule mode) | done |
-| Must-preserve check (rule must still surface flagged signal events) | done |
-| SPL safety guardrails (read-only check, balanced-paren check, syntax-anti-pattern detection) | done |
-| Deterministic fallback model client | done |
-| Streamlit UI with 3 tabs and Live/Replay toggle | done |
-| Scenario 1 — Failed Login Burst Refinement | done |
-| Scenario 2 — Suspicious Command Execution | done |
-| Scenario 3 — Custom Rule (user-supplied baseline + intent) | done |
-| Markdown report generator | done |
+| Scenario | Baseline alerts | Refined alerts | Reduction | Must-catch preserved |
+|---|---|---|---|---|
+| Failed-login brute force | 113 | 1 | **99%** | **100%** |
+| Suspicious command execution | 122 | 6 | **95%** | **100%** |
+
+Each refinement is parser-validated by Splunk itself and gated on preservation —
+if a candidate can't both cut noise *and* keep the must-catch entities, it is
+rejected and nothing is written to disk.
+
+**Judges without a Splunk instance:** switch the sidebar to **Replay** and the
+full report renders from saved runs in [`reports/samples/`](reports/samples) — no
+Splunk, no model, no keys required.
 
 ---
 
-## Architecture
+## How it works
 
-```text
-Synthetic security logs (auth + process events)
-        |
-        v
-Splunk Enterprise (remote)
-index=$SPLUNK_INDEX
-        |
-        v
-RulePilot Agent
-   1. Run baseline SPL
-   2. Plan diagnostic searches
-        - hardcoded for demo scenarios
-        - LLM-planned for custom scenarios
-   3. Run diagnostics
-   4. Ask LLM to propose refined SPL
-   5. Validate (read-only + balanced parens)
-   6. Run refined SPL
-   7. Compare before/after
-        |
-        +---> Streamlit UI (live or replay from saved JSON)
-        +---> CLI report (run_demo.py)
-        +---> Markdown report (reports/<scenario>_report.md)
-```
+See [`architecture_diagram.md`](architecture_diagram.md) for the full picture. In short:
 
-The LLM-driven path is primary. A `DeterministicFallbackModelClient` is kept as a demo-safety net: if no model provider is configured, the agent still produces a valid (no-op) report instead of crashing.
+- **One input form** (used by all three tabs): a baseline SPL, a plain-English
+  goal, and a plain-English **must-preserve** statement.
+- **Natural-language → SPL compiler.** The analyst describes what must survive;
+  the selected model compiles it to an executable SPL "oracle," which Splunk's
+  own parser validates and the analyst reviews/approves. The analyst never has
+  to hand-write the verification query.
+- **Agentic refinement loop.** Run baseline → diagnose the noise → propose a
+  refined SPL → **parser pre-flight** → run it → **preservation probe** against
+  the approved oracle → accept, or revise with feedback (up to N iterations).
+- **Model-agnostic.** Pick the provider at runtime — **Local (Qwen)**,
+  **Frontier (OpenAI)**, or **Splunk AI Assistant** (via the Splunk MCP Server).
+- **Honest by construction.** When no candidate passes, the UI shows `—`, never a
+  fake "100% reduction," and the on-disk rule is never overwritten by a rejected
+  attempt. Refined SPL stays read-only and targets the same index.
 
----
+### Why it stands out
 
-## Scenarios
-
-### 1. Failed Login Burst Refinement (demo)
-
-Baseline matches every failed-login event. Refinement aggregates failed logins into 10-minute windows by `user` + `src_ip` and only surfaces repeated bursts.
-
-### 2. Suspicious Command Execution (demo)
-
-Baseline keyword-matches any command line containing `powershell`, `curl`, `wget`, or `base64` — fires constantly on admins, CI jobs, and routine scripts. Refinement narrows to high-risk patterns (encoded PowerShell, `curl|sh`, `wget|sh`, `/dev/tcp/` reverse shells) and excludes service accounts.
-
-### 3. Custom Rule (the real product)
-
-Analyst pastes their own baseline SPL plus a plain-English goal and "must preserve" intent. RulePilot asks the LLM to plan diagnostics from the SPL, runs them, and proposes a refined version. This is the framework piece that lets RulePilot extend beyond the two canned demos.
+- **Verification-first.** Most "AI writes SPL" tools generate; RulePilot
+  generates **and proves no regression** against analyst-defined ground truth.
+- **Splunk-native grounding.** Every candidate is checked by Splunk's own SPL
+  parser before dispatch; diagnostics come from live data.
+- **Trustworthy UX.** Honest-failure states, analyst approval of the oracle, no
+  silent index/sourcetype changes.
 
 ---
 
-## Repository Structure
+## Quickstart
 
-```text
-rule-pilot/
-  README.md
-  app.py                          # Streamlit UI (3 tabs)
-  run_demo.py                     # CLI demo entry point
+### Prerequisites
 
-  detections/
-    failed_login_baseline.spl
-    failed_login_refined.spl
-    suspicious_command_baseline.spl
-    suspicious_command_refined.spl  # written by agent
-    custom_refined.spl              # written by agent
+- Python 3.10+
+- A reachable Splunk Enterprise instance (REST API on `:8089`)
+- One model provider:
+  - an **OpenAI API key** (recommended for the demo), **or**
+  - a local **Ollama** running `qwen2.5:7b`, **or**
+  - the **Splunk MCP Server** + AI Assistant (optional — see below)
 
-  src/
-    agent.py                      # RulePilotAgent.run(scenario)
-    scenarios.py                  # Scenario dataclass + builders
-    prompts.py                    # refinement + diagnostic-planning prompts
-    models.py                     # ModelClient impls + SPL safety checks
-    splunk_client.py              # Splunk REST API client
-    reporting.py                  # Markdown report renderer
-
-  scripts/
-    generate_synthetic_logs.py    # auth + process-execution events
-
-  data/
-    synthetic_security_logs.jsonl
-
-  reports/
-    failed_login_report.md
-    suspicious_command_report.md
-    samples/
-      failed_login.json           # saved by app.py for Replay mode
-      suspicious_command.json
-      custom.json
-```
-
----
-
-## System Setup
-
-### Local machine
-
-The MacBook is the main development environment. It edits code, runs the Streamlit UI, opens Splunk Web via an SSH tunnel, and runs the agent (which talks to remote Splunk through the same tunnel).
-
-### Remote server
-
-The remote Linux server runs Splunk Enterprise:
-
-```text
-Remote Linux server: coursesrv01.cs.virginia.edu
-User: ml6vq
-Splunk install path: /opt/splunk
-Splunk Web port: 8000
-Splunk management/API port: 8089
-```
-
-Check Splunk status:
-
-```bash
-sudo /opt/splunk/bin/splunk status
-```
-
-Start Splunk if needed:
-
-```bash
-sudo /opt/splunk/bin/splunk start --accept-license --run-as-root
-```
-
-This project does **not** require Splunk Enterprise Security.
-
----
-
-## Accessing Splunk from the MacBook
-
-Open an SSH tunnel that forwards both Splunk Web (8000) and the management API (8089):
-
-```bash
-ssh -L 8000:localhost:8000 -L 8089:localhost:8089 ml6vq@coursesrv01.cs.virginia.edu
-```
-
-Keep the terminal session open. Then:
-
-- Splunk Web: <http://localhost:8000>
-- Splunk REST API (used by RulePilot): <https://localhost:8089>
-
----
-
-## Python Environment
+### 1. Install
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install streamlit python-dotenv requests
-```
-
-Or, if a `requirements.txt` is added later:
-
-```bash
 pip install -r requirements.txt
 ```
 
----
-
-## Environment Variables
-
-Copy the example file and edit:
+### 2. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Required keys:
+Edit `.env` — set your Splunk credentials and a model provider. For the demo we
+use OpenAI:
 
 ```env
 SPLUNK_HOST=localhost
 SPLUNK_API_PORT=8089
-SPLUNK_USERNAME=elena
-SPLUNK_PASSWORD=changeme
-SPLUNK_INDEX=rulepilot-demo-v2
+SPLUNK_USERNAME=admin
+SPLUNK_PASSWORD=...
+SPLUNK_INDEX=rulepilot_demo
 SPLUNK_VERIFY_SSL=false
-```
 
-Optional — model provider (LLM-driven refinement):
-
-```env
 RULEPILOT_MODEL_PROVIDER=openai_compatible
-RULEPILOT_MODEL_BASE_URL=http://localhost:11434/v1
-RULEPILOT_MODEL_NAME=llama3.2:3b
-RULEPILOT_MODEL_API_KEY=local
-RULEPILOT_MODEL_TIMEOUT=60
-RULEPILOT_MODEL_TEMPERATURE=0.0
-RULEPILOT_MODEL_MAX_TOKENS=1200
+RULEPILOT_MODEL_BASE_URL=https://api.openai.com/v1
+RULEPILOT_MODEL_NAME=gpt-4o
+RULEPILOT_OPENAI_API_KEY=sk-...
+RULEPILOT_MODEL_API_KEY=sk-...
 ```
 
-If `RULEPILOT_MODEL_PROVIDER` is unset or `deterministic`, the agent uses a safe no-op fallback (no LLM calls). This guarantees the demo runs even with no model endpoint reachable.
-
-Do not commit `.env`.
-
----
-
-## Splunk MCP Server (optional, Phase 5b)
-
-RulePilot can connect to **Splunk's official MCP Server** (Splunkbase app #7931, GA 2026). This unlocks Splunk-native tools — including `saia_optimize_spl` (when the Splunk AI Assistant app is also installed and activated) which routes refinement through Splunk's own AI, sidestepping local-model SPL grammar issues entirely.
-
-### Install the MCP Server app
-
-On the Splunk search head:
-
-1. In Splunk Web → **Apps → Find More Apps** → search for "Splunk MCP Server" → install.
-2. After install, navigate to the **Splunk MCP Server** app from the Apps menu.
-3. Click **Create MCP Encrypted Token**. Tokens use the audience `mcp`. Note: encrypted tokens are different from regular Splunk API tokens — they're issued by the MCP Server app and can be time-bound and revoked.
-4. Copy the endpoint URL from the **Endpoints** panel. For Splunk Enterprise on the management port it will look like `https://<splunk-host>:8089/services/mcp` — the same port we already tunnel for the REST API, so no new SSH forwarding is needed.
-
-### Configure RulePilot
-
-Add to `.env`:
-
-```env
-SPLUNK_MCP_ENDPOINT=https://localhost:8089/services/mcp
-SPLUNK_MCP_TOKEN=<your encrypted token>
-```
-
-The MCP transport reuses the existing `SPLUNK_VERIFY_SSL` setting, so self-signed certs work out of the box when `SPLUNK_VERIFY_SSL=false`.
-
-### Verify the connection
-
-In the Streamlit UI sidebar, click **Test MCP connection**. You should see:
-
-```
-Connected to https://localhost:8089/services/mcp — N tools available.
-Sample tool names:
-- splunk_run_query
-- splunk_get_indexes
-- splunk_get_knowledge_objects
-- ...
-```
-
-Or from the command line:
+If Splunk is remote, open a tunnel first:
 
 ```bash
-python3 -m src.splunk_mcp_client
+ssh -L 8000:localhost:8000 -L 8089:localhost:8089 <user>@<splunk-host>
 ```
 
-### Splunk AI Assistant (separate, optional)
-
-Tools prefixed `saia_*` (`saia_optimize_spl`, `saia_generate_spl`, `saia_explain_spl`, `saia_ask_splunk_question`) only appear in the tool list when the **Splunk AI Assistant** app is *also* installed and activated. Without it, the MCP Server still exposes the `splunk_*` tools (search, knowledge-object lookup, metadata). Activating AI Assistant requires an activation code from Splunk.
-
-### Current integration status
-
-| Piece | State |
-| --- | --- |
-| `SplunkMCPClient` (sync wrapper over the `mcp` Python SDK) | done |
-| `Test MCP connection` sidebar button | done |
-| `.env.example` template | done |
-| Connection verified against Splunk MCP Server v1.2.0 on the dev environment | done |
-| Agent uses MCP for refinement (`saia_optimize_spl`) | pending — waits for AI Assistant activation |
-| Agent uses MCP for saved-search exemplars (`splunk_get_knowledge_objects`) | pending |
-
----
-
-## Splunk Index Setup
-
-The index name is read from `SPLUNK_INDEX` — both baseline SPL files use `index={index}` as a placeholder that the scenario builders fill in at runtime, so re-versioning the index (e.g. `rulepilot-demo-v2`) requires no code changes.
-
-Create the index in Splunk Web (`Settings → Indexes → New Index → rulepilot-demo-v2`) or via CLI:
-
-```bash
-sudo /opt/splunk/bin/splunk add index rulepilot-demo-v2
-```
-
----
-
-## Synthetic Dataset
-
-Generate it with:
+### 3. Load the example dataset
 
 ```bash
 python3 scripts/generate_synthetic_logs.py --out data/synthetic_security_logs.jsonl --events 500
 ```
 
-The generator produces two event families:
-
-**Authentication events** (`event_type=auth`):
-
-- benign successful logins
-- isolated failed attempts
-- service-account noise
-- a deliberate password-spray sequence (8 failures + 1 success) for `alice` from `45.83.12.9`
-
-**Process-execution events** (`event_type=process`):
-
-- benign admin / dev activity (routine `powershell`, `curl`, `base64`, etc.)
-- service-account scripted workloads
-- a small set of genuinely suspicious commands: encoded PowerShell, `curl|sh`, `wget|sh`, `/dev/tcp/` reverse shells
-
-Example process event:
-
-```json
-{"_time":"2026-05-27T15:19:17Z","event_type":"process","host":"host-web-01","user":"alice","process":"powershell.exe","parent_process":"winword.exe","command_line":"powershell.exe -nop -w hidden -enc JABjAD0A...","sourcetype":"process","source":"synthetic_security_logs"}
-```
-
----
-
-## Ingesting Synthetic Logs
-
-### Option 1: Manual upload through Splunk Web
-
-1. Open <http://localhost:8000>
-2. `Settings → Add Data → Upload`
-3. Upload `data/synthetic_security_logs.jsonl`
-4. Set index to your current `SPLUNK_INDEX` value
-5. Set sourcetype to `_json` (the generator emits structured JSON; per-event `sourcetype` is set inside each record)
-
-### Option 2: Scripted ingestion
-
-Not yet implemented. For the MVP, manual upload is the supported path.
-
----
-
-## Running the Demo
-
-### CLI
+Create the index and ingest:
 
 ```bash
+# create the index (Splunk CLI on the search head)
+sudo /opt/splunk/bin/splunk add index rulepilot_demo
+```
+
+Then upload `data/synthetic_security_logs.jsonl` via **Splunk Web → Settings →
+Add Data → Upload** into index `rulepilot_demo` (sourcetype `_json`).
+
+### 4. Run
+
+```bash
+# Streamlit UI (recommended)
+streamlit run app.py        # http://localhost:8501
+
+# or the CLI
 python3 run_demo.py --scenario failed_login
 python3 run_demo.py --scenario suspicious_command
 ```
 
-Useful flags:
-
-```bash
-python3 run_demo.py --scenario failed_login --show-spl --write-report
-python3 run_demo.py --scenario suspicious_command --json
-```
-
-### Streamlit UI
-
-```bash
-streamlit run app.py
-```
-
-Then open <http://localhost:8501>.
-
-The UI has three tabs:
-
-1. **Failed Login** — pre-wired demo scenario.
-2. **Suspicious Command** — pre-wired demo scenario.
-3. **Custom Rule** — paste any baseline SPL + a goal + a must-preserve clause. The agent asks the LLM to plan diagnostics, runs them, and proposes a refined rule.
-
-The sidebar has a **Live / Replay** toggle:
-
-- **Live** — calls Splunk and the LLM. Auto-saves the result to `reports/samples/<scenario>.json`.
-- **Replay** — loads the last saved sample. Demo-safe: lets you walk through results without depending on Splunk or the LLM being reachable.
-
-Each report renders:
-
-- baseline / refined / reduction-% metric cards
-- diagnostics tables (top values per field, burst/cluster groups)
-- agent diagnosis + refinement strategy + expected effect + risk
-- side-by-side baseline vs. refined SPL
-- download buttons for refined SPL and Markdown report
+In the UI: pick a tab, choose a **Model** in the sidebar, optionally click
+**Generate check from the description** to compile the must-preserve oracle, then
+**Run**. Toggle **Live / Replay** in the sidebar — Replay needs neither Splunk
+nor a model.
 
 ---
 
-## Safety Guardrails
+## The three tabs
 
-Applied to every LLM-proposed SPL (refinements and planned diagnostics):
-
-- **Read-only check** — rejects `delete`, `outputlookup`, `collect`, `sendemail`, `script`, `map`, `rest`.
-- **Balanced-paren check** — string-aware paren/quote counter; rejects malformed SPL before sending to Splunk.
-- **Splunk-native SPL parser pre-flight** — every candidate and every LLM-planned diagnostic is sent to Splunk's `/services/search/parser` endpoint with `parse_only=true` before any search job is dispatched. The parser's own error message is fed back to the LLM as revision feedback. Catches small-model mistakes like `user STARTSWITH "svc_"`, missing quotes, and invalid threshold syntax — using Splunk's own grammar, not regex heuristics.
-- **SPL anti-pattern detection** — backup heuristic flag for patterns like `| sort - count > 5` that Splunk's parser sometimes accepts as "search for the literal string `>` and `5`" but the model clearly meant as a threshold.
-- **Duplicate-attempt detection** — if the model resubmits the same SPL across iterations, the verdict becomes `duplicate_attempt` with sharper feedback so we don't burn the iteration budget on the same wrong answer.
-- **Field whitelist** — the LLM prompt lists the allowed fields per scenario; the model is instructed not to invent fields.
-- **Index discipline** — refined SPL must target the same `SPLUNK_INDEX`; the agent does not silently change index/sourcetype.
-
-### Quality gates (per iteration)
-
-After each candidate SPL runs against Splunk, the agent computes a verdict:
-
-| Verdict | When | Behavior |
-|---|---|---|
-| `accepted` | ≥20% row reduction AND ≥80% must-preserve coverage | Ship it. |
-| `too_tight` | refined returns 0 rows | Revise — loosen the filter. |
-| `no_reduction` | refined ≥ baseline | Revise — add aggregation/thresholding. |
-| `minimal_reduction` | <20% reduction | Revise — tighten further. |
-| `lost_must_preserve` | <80% of must-catch entities survive in refined output | Revise — names the missing entities in the feedback. |
-| `over_reduction` | ≥95% reduction AND ≤3 rows left (and no preservation check defined) | Revise — likely dropped real signal. |
-| `parser_rejected` | Splunk's SPL parser refused the candidate | Skip the search job entirely; feed parser's own error as revision feedback. |
-| `malformed_spl` / `duplicate_attempt` | see above | Revise with sharper feedback. |
-
-The loop runs up to 2 revisions per scenario.
-
-If any check fails after the iteration budget is exhausted, the report still surfaces the last attempt with its verdict so the analyst sees exactly what went wrong.
+1. **Failed Login** — a worked example, pre-filled to show good inputs.
+2. **Suspicious Command** — a second worked example.
+3. **Custom Rule** — blank; bring your own baseline SPL, goal, and must-preserve
+   description. The same form and the same agent loop, on any rule.
 
 ---
 
-## Agent Workflow
+## Models
+
+RulePilot is model-agnostic; choose in the sidebar:
+
+| Provider | Notes |
+|---|---|
+| **Frontier (OpenAI)** | e.g. `gpt-4o` via the OpenAI API. Strongest NL→SPL fidelity; used in the demo. Needs `RULEPILOT_OPENAI_API_KEY`. |
+| **Local (Qwen)** | `qwen2.5:7b` via Ollama. Offline, no keys. Set `RULEPILOT_LOCAL_*`. |
+| **Splunk AI Assistant** | Routes through `saia_generate_spl` over the Splunk MCP Server. Wired; currently blocked on a tenant `saia-api-v2` entitlement (see [PROGRESS.md](PROGRESS.md)). |
+
+A misconfigured or unreachable provider (no key, local LLM down, AI Assistant not
+entitled) surfaces a **clear error**, never a silent failure.
+
+### Splunk MCP Server (optional)
+
+To enable the Splunk AI Assistant provider and the sidebar **Test MCP
+connection** button: install the **Splunk MCP Server** app (Splunkbase #7931),
+create an encrypted token, and set `SPLUNK_MCP_ENDPOINT` + `SPLUNK_MCP_TOKEN` in
+`.env`. Verify with:
+
+```bash
+python3 -m src.splunk_mcp_client
+```
+
+---
+
+## Repository structure
 
 ```text
-1. Load scenario (baseline SPL + context + must-preserve clause).
-2. Run baseline SPL against Splunk.
-3. Resolve diagnostic plan:
-     - hardcoded for demo scenarios
-     - LLM-planned + validated for custom scenarios
-4. Run diagnostics.
-5. Build refinement prompt with diagnostic summary.
-6. Ask the model for a refined SPL + diagnosis + rationale + expected effect + risk.
-7. Validate the refined SPL (read-only + balanced parens).
-8. Write refined SPL to disk; run it against Splunk.
-9. Return a report dict (consumed by CLI, UI, and Markdown renderer).
+rule-pilot/
+  app.py                     # Streamlit UI (shared rule-input form, 3 tabs)
+  run_demo.py                # CLI entry point
+  architecture_diagram.md    # required architecture diagram (Mermaid)
+  requirements.txt
+  LICENSE                    # MIT
+
+  src/
+    agent.py                 # RulePilotAgent loop + compile_preservation_check
+    scenarios.py             # Scenario dataclass + builders
+    prompts.py               # refinement / diagnostic / NL→SPL-compile prompts
+    models.py                # ModelClient protocol, providers, build_model_client
+    splunk_client.py         # Splunk REST client (search jobs, parser pre-flight)
+    splunk_mcp_client.py     # Splunk MCP Server client (official mcp SDK)
+    signals.py               # analyst-style signals from diagnostics
+    reporting.py             # Markdown report renderer
+
+  detections/                # baseline + agent-written refined SPL
+  scripts/generate_synthetic_logs.py
+  data/                      # synthetic auth + process logs
+  reports/samples/           # saved runs for Replay mode
 ```
 
 ---
 
-## Roadmap
+## Example dataset
 
-### Phase 1 — Repo skeleton (done)
+[`scripts/generate_synthetic_logs.py`](scripts/generate_synthetic_logs.py)
+produces two event families in one JSONL file:
 
-- [x] Repository structure
-- [x] Synthetic log generator
-- [x] Sample detections
-- [x] README
-- [x] `.env.example`
+- **Authentication** (`event_type=auth`): benign logins, isolated typos,
+  service-account churn, and a deliberate password-spray (8 failures + success)
+  for `alice` from `45.83.12.9` — the genuine attack the refined rule must keep.
+- **Process execution** (`event_type=process`): routine admin/dev activity, plus
+  a small set of genuinely suspicious commands (encoded PowerShell, `curl|sh`,
+  `/dev/tcp/` reverse shells).
 
-### Phase 2 — Splunk integration (done)
-
-- [x] Create index
-- [x] Ingest synthetic logs
-- [x] Python Splunk client (REST API + search job polling)
-- [x] Return result rows to the agent
-
-### Phase 3 — Rule tuning (done)
-
-- [x] Diagnostic query execution
-- [x] LLM-driven refinement
-- [x] LLM-driven diagnostic planning (custom-rule mode)
-- [x] Deterministic fallback
-- [x] SPL safety guardrails
-- [x] Before/after Markdown report
-
-### Phase 4 — Demo interface (done)
-
-- [x] CLI demo (`run_demo.py`)
-- [x] Streamlit UI with 3 tabs + Live/Replay toggle
-- [x] Shared report renderer
-- [x] Per-scenario sample JSON for replay
-
-### Phase 5 — Splunk-native AI integration (optional, post-hackathon)
-
-- [ ] Splunk MCP Server
-- [ ] Splunk AI Assistant for SPL
-- [ ] Splunk Hosted Models / AI Toolkit
-
-### Phase 6 — Packaging
-
-- [ ] Add `requirements.txt`
-- [ ] Add architecture diagram
-- [ ] Add demo screenshots
-- [ ] Record demo video
-- [ ] Prepare Devpost submission
+The injected attacks are the "must-catch" ground truth the preservation gate
+verifies against.
 
 ---
 
-## Nice-to-Have Features
+## Safety guardrails & quality gates
 
-Post-hackathon directions:
+Applied to every model-proposed SPL (refinements, planned diagnostics, and
+compiled must-preserve checks):
 
-1. Third demo scenario: data exfiltration (network logs, off-hours large transfers)
-2. Intent classification (false_positive_reduction / coverage_expansion / mixed)
-3. Analyst approval workflow (accept / reject / edit refinement)
-4. Rule history panel (track refinements over time)
-5. MITRE ATT&CK technique labeling on refined rules
-6. Splunk MCP integration
-7. BOTS v3 dataset support
-8. Splunk custom app packaging
+- **Read-only check** — rejects `delete`, `outputlookup`, `collect`, `sendemail`,
+  `script`, `map`, `rest`.
+- **Balanced-paren/quote check** before dispatch.
+- **Splunk-native parser pre-flight** — every candidate is sent to
+  `/services/search/parser?parse_only=true`; the parser's own error is fed back
+  to the model as revision feedback.
+- **Anti-pattern + duplicate-attempt detection** to avoid burning the iteration
+  budget on the same wrong answer.
+- **Field whitelist** and **index discipline** (no silent index/sourcetype change).
 
----
-
-## Non-Goals
-
-RulePilot does not attempt to:
-
-- fully automate detection engineering
-- claim that generated SPL is always correct
-- depend on proprietary production SOC data
-- require Splunk Enterprise Security
-- require BOTS v3 to function
+Per-iteration verdicts: `accepted` (≥20% reduction **and** ≥80% must-preserve),
+`too_tight`, `no_reduction`, `minimal_reduction`, `lost_must_preserve`,
+`over_reduction`, `parser_rejected`, `malformed_spl`, `duplicate_attempt`. If the
+budget is exhausted with no acceptance, the report surfaces the last attempt and
+its verdict — honestly marked as **not accepted**.
 
 ---
 
-## Guiding Principle
+## License
 
-The core workflow must work without depending on any single uncertain external service. Splunk is required; everything else (LLM provider, MCP, AI Toolkit) is pluggable behind interfaces, with a deterministic fallback for demo safety.
+MIT — see [LICENSE](LICENSE).
+
+## Project status & roadmap
+
+See [PROGRESS.md](PROGRESS.md) for the feature build log, known blockers, and
+future direction.

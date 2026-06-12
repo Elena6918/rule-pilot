@@ -12,6 +12,14 @@ source of ground truth.
 - **Interfaces:** Streamlit UI (`app.py`) and CLI (`run_demo.py`)
 - **Splunk surface:** Splunk Enterprise REST + Splunk MCP Server (Splunkbase #7931)
 
+### What this diagram shows (maps to the submission requirements)
+
+| Requirement | Where |
+|---|---|
+| **How the app interacts with Splunk** | §1 (Splunk access layer), §4 (integration points table) — REST search jobs + parser pre-flight, and the MCP Server |
+| **How AI models / agents are integrated** | §1 (model-provider block), §2 (natural-language → SPL compiler), §5 (provider-agnostic `ModelClient`) |
+| **Data flow between services, APIs, and components** | §1 (component graph) and §3 (the agentic refine → verify → revise loop) |
+
 ---
 
 ## 1. System architecture
