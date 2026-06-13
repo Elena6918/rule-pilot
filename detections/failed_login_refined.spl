@@ -1,4 +1,4 @@
-search index=rulepilot_demo sourcetype=auth action=login status=failure user!="svc_*" reason!="mistyped_password"
+search index=rulepilot_demo sourcetype=auth action=login status=failure user!="svc_*" reason!="mistyped_password" reason!="expired_password"
 | bucket _time span=10m
 | stats count as failed_count by _time, user, src_ip
 | where failed_count >= 5

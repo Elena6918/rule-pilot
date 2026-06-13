@@ -28,7 +28,7 @@ It's not a model that writes detections. It's an agent that reduces alert noise
 | Scenario | Baseline alerts | Refined alerts | Reduction | Must-catch preserved |
 |---|---|---|---|---|
 | Failed-login brute force | 113 | 1 | **99%** | **100%** |
-| Suspicious command execution | 122 | 6 | **95%** | **100%** |
+| Suspicious command execution | 122 | 12 | **90%** | **100%** |
 
 Each refinement is parser-validated by Splunk itself and gated on preservation —
 if a candidate can't both cut noise *and* keep the must-catch entities, it is
@@ -53,6 +53,11 @@ See [`architecture_diagram.md`](architecture_diagram.md) for the full picture. I
 - **Agentic refinement loop.** Run baseline → diagnose the noise → propose a
   refined SPL → **parser pre-flight** → run it → **preservation probe** against
   the approved oracle → accept, or revise with feedback (up to N iterations).
+- **Runs on the Splunk MCP Server.** Every search RulePilot executes — baseline,
+  diagnostics, candidates, and the preservation checks — goes through the
+  **Splunk MCP Server** (`splunk_run_query`, token-authenticated), one of the
+  hackathon's listed Splunk AI capabilities. REST handles SPL parser pre-flight
+  and serves as a fallback.
 - **Model-agnostic.** Pick the provider at runtime — **Local (Qwen)**,
   **Frontier (OpenAI)**, or **Splunk AI Assistant** (via the Splunk MCP Server).
 - **Honest by construction.** When no candidate passes, the UI shows `—`, never a
@@ -175,12 +180,19 @@ RulePilot is model-agnostic; choose in the sidebar:
 A misconfigured or unreachable provider (no key, local LLM down, AI Assistant not
 entitled) surfaces a **clear error**, never a silent failure.
 
-### Splunk MCP Server (optional)
+## Splunk MCP Server (the default data path)
 
-To enable the Splunk AI Assistant provider and the sidebar **Test MCP
-connection** button: install the **Splunk MCP Server** app (Splunkbase #7931),
-create an encrypted token, and set `SPLUNK_MCP_ENDPOINT` + `SPLUNK_MCP_TOKEN` in
-`.env`. Verify with:
+RulePilot runs **all** its Splunk searches through the **Splunk MCP Server**
+(`splunk_run_query`) — this is the Splunk AI capability it uses at runtime.
+Install the **Splunk MCP Server** app (Splunkbase #7931), create an encrypted
+token, and set `SPLUNK_MCP_ENDPOINT` + `SPLUNK_MCP_TOKEN` in `.env`. When these
+are set, `SplunkClient.from_env()` automatically routes search execution through
+MCP; REST is used only for SPL parser pre-flight and as a fallback if MCP is
+briefly unreachable. The same MCP connection also exposes the Splunk AI Assistant
+(`saia_*`) provider.
+
+Verify the connection (also available as the sidebar **Test MCP connection**
+button):
 
 ```bash
 python3 -m src.splunk_mcp_client

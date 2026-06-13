@@ -23,9 +23,11 @@ index=rulepilot_demo event_type=process command_line="*powershell*" OR command_l
 ## Refined Rule
 
 ```spl
-search index=rulepilot_demo event_type=process (command_line="*powershell* -EncodedCommand*" OR command_line="*curl* | *sh*" OR command_line="*wget* | *sh*" OR command_line="*base64* -d*" OR command_line="*/dev/tcp/*") user!="svc_*"
-| table _time, host, user, process, parent_process, command_line
-| sort - _time
+search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) AND NOT (user STARTSWITH "svc_")
+| bucket _time span=10m
+| stats count as suspicious_count by user, process, parent_process, command_line
+| where suspicious_count >= 5
+| sort - suspicious_count
 ```
 
 ## Before/After Metrics
@@ -33,19 +35,19 @@ search index=rulepilot_demo event_type=process (command_line="*powershell* -Enco
 | Metric | Value |
 | --- | --- |
 | Baseline result rows | 122 |
-| Refined result rows | 12 |
-| Absolute reduction | 110 |
-| Percent reduction | 90.2% |
+| Refined result rows | 6 |
+| Absolute reduction | 116 |
+| Percent reduction | 95.1% |
 
 ## Analyst Interpretation
 
-The baseline SPL is too broad, capturing routine admin and service account activity.
+Most detections are from common processes and users, with service accounts contributing significant noise.
 
-Filter out service accounts and focus on high-risk command patterns. This refinement targets specific high-risk command patterns and excludes service accounts, reducing noise from benign activity.
+Filter out service accounts, aggregate by process and user, and identify repeated bursts of suspicious commands. Filters out service accounts to reduce noise. Aggregates events over time windows and surfaces only repeated bursts of suspicious commands.
 
-**Expected effect:** The result count should decrease significantly, focusing on truly suspicious command executions.
+**Expected effect:** Reduces false positives by filtering out benign activity while preserving high-risk execution patterns.
 
-**Risk:** Low risk of missing true positives as the refinement still captures high-risk patterns.
+**Risk:** Misses occasional true positives if the burst threshold is too high, but this risk is mitigated by the reduced noise.
 
 ## Caveats
 

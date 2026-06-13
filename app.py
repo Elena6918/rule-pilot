@@ -2,8 +2,8 @@
 """Streamlit UI for RulePilot.
 
 Three tabs:
-  1. Failed Login (canned demo scenario)
-  2. Suspicious Command Execution (canned demo scenario)
+  1. Suspicious Command Execution (worked example)
+  2. Failed Login (worked example)
   3. Custom Rule (user-supplied baseline SPL + intent)
 
 A "Live / Replay" toggle in the sidebar controls whether each Run button
@@ -94,6 +94,40 @@ def load_sample(scenario_key: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def render_save_golden_button(
+    scenario_key: str,
+    report: dict[str, Any],
+    *,
+    run_settings: dict[str, Any],
+) -> None:
+    """In Live mode, let the analyst promote the current run to the golden
+    Replay sample. Live runs no longer auto-save, so a later unstable run cannot
+    clobber a good sample — you save it on purpose."""
+    if run_settings.get("mode") == "Replay saved sample":
+        return
+    st.divider()
+    if st.button(
+        "Save as golden replay sample",
+        key=f"save_golden_{scenario_key}",
+        help="Overwrites reports/samples/"
+        f"{scenario_key}.json — Replay mode loads this. Commit it to keep it.",
+    ):
+        # Capture the current must-preserve check too, so Replay mode can show
+        # the same compiled check (the "Generate" step is also model-dependent).
+        golden = dict(report)
+        golden["_golden_check_spl"] = st.session_state.get(
+            f"{scenario_key}_preserve_spl", ""
+        )
+        golden["_golden_check_keys"] = st.session_state.get(
+            f"{scenario_key}_preserve_keys", ""
+        )
+        path = save_sample(scenario_key, golden)
+        st.success(
+            f"Saved golden replay → {path.relative_to(REPO_ROOT)}. "
+            "Replay mode will now load this run and its must-preserve check."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -454,14 +488,20 @@ def render_demo_tab(scenario_key: str, run_settings: dict[str, Any]) -> None:
         "form drives the Custom Rule tab; edit any field, or just press Run."
     )
 
+    # In Replay mode, pre-fill the must-preserve check from the golden sample so
+    # the demo is deterministic (the "Generate" step is model-dependent). In
+    # Live mode the check starts empty — the analyst generates or pastes it.
+    golden = (
+        load_sample(scenario_key)
+        if run_settings["mode"] == "Replay saved sample"
+        else None
+    ) or {}
     defaults = {
         "baseline_spl": base.baseline_spl,
         "context_hint": base.context_hint,
         "must_preserve": base.must_preserve,
-        # The check SPL starts empty — the analyst generates it from the
-        # plain-English "Must-preserve behavior" above, or pastes their own.
-        "preservation_check_spl": "",
-        "preservation_keys": "",
+        "preservation_check_spl": golden.get("_golden_check_spl", ""),
+        "preservation_keys": golden.get("_golden_check_keys", ""),
         "field_set": _field_set_label(base.available_fields),
     }
     values = _rule_input_form(
@@ -491,6 +531,7 @@ def render_demo_tab(scenario_key: str, run_settings: dict[str, Any]) -> None:
     report = st.session_state.get(state_key)
     if report:
         render_report(report)
+        render_save_golden_button(scenario_key, report, run_settings=run_settings)
     else:
         st.info("Press **Run** to generate a report.")
 
@@ -503,14 +544,21 @@ def render_custom_tab(run_settings: dict[str, Any]) -> None:
         "must-preserve check."
     )
 
+    idx = _index_from_env()
     # The custom tab is "bring your own rule" — every field starts blank and is
-    # guided by placeholder text in the shared form.
+    # guided by placeholder text in the shared form. In Replay mode the check is
+    # pre-filled from the golden sample so the demo is deterministic.
+    golden = (
+        load_sample("custom")
+        if run_settings["mode"] == "Replay saved sample"
+        else None
+    ) or {}
     defaults = {
         "baseline_spl": "",
         "context_hint": "",
         "must_preserve": "",
-        "preservation_check_spl": "",
-        "preservation_keys": "",
+        "preservation_check_spl": golden.get("_golden_check_spl", ""),
+        "preservation_keys": golden.get("_golden_check_keys", ""),
         "field_set": "both",
     }
     values = _rule_input_form(
@@ -536,6 +584,7 @@ def render_custom_tab(run_settings: dict[str, Any]) -> None:
     report = st.session_state.get("report_custom")
     if report:
         render_report(report)
+        render_save_golden_button("custom", report, run_settings=run_settings)
     else:
         st.info("Configure your SPL and press **Run**.")
 
@@ -573,8 +622,9 @@ def _execute_or_replay(
             st.error(f"Run failed: {exc}")
             return None
 
-    saved = save_sample(scenario.key, report)
-    st.success(f"Saved sample → {saved.relative_to(REPO_ROOT)}")
+    # Do NOT auto-save here. Auto-saving every run would let a later unstable
+    # run overwrite a good "golden" Replay sample. The analyst promotes a run
+    # explicitly via the "Save as golden replay sample" button.
     return report
 
 
@@ -637,12 +687,12 @@ def main() -> None:
     }
 
     tab1, tab2, tab3 = st.tabs(
-        ["Failed Login", "Suspicious Command", "Custom Rule"]
+        ["Suspicious Command", "Failed Login", "Custom Rule"]
     )
     with tab1:
-        render_demo_tab("failed_login", run_settings)
-    with tab2:
         render_demo_tab("suspicious_command", run_settings)
+    with tab2:
+        render_demo_tab("failed_login", run_settings)
     with tab3:
         render_custom_tab(run_settings)
 

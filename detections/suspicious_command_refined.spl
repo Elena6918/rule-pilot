@@ -1,3 +1,5 @@
-search index=rulepilot_demo event_type=process (command_line="*powershell* -EncodedCommand*" OR command_line="*curl* | *sh*" OR command_line="*wget* | *sh*" OR command_line="*base64* -d*" OR command_line="*/dev/tcp/*") user!="svc_*"
-| table _time, host, user, process, parent_process, command_line
-| sort - _time
+search index=rulepilot_demo event_type=process (command_line=*powershell* OR command_line=*curl* OR command_line=*wget* OR command_line=*base64*) AND NOT (user STARTSWITH "svc_")
+| bucket _time span=10m
+| stats count as suspicious_count by user, process, parent_process, command_line
+| where suspicious_count >= 5
+| sort - suspicious_count

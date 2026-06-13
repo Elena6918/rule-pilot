@@ -116,6 +116,56 @@ class SplunkMCPClient:
             "endpoint": self.endpoint,
         }
 
+    def run_query(
+        self,
+        spl: str,
+        *,
+        earliest_time: str = "0",
+        latest_time: str = "now",
+        max_results: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Run an SPL search through the Splunk MCP Server's ``splunk_run_query``
+        tool and return result rows as a list of dicts (same shape as the REST
+        client). Raises SplunkMCPClientError on tool error."""
+        result = self.call_tool(
+            "splunk_run_query",
+            {
+                "query": spl,
+                "earliest_time": earliest_time,
+                "latest_time": latest_time,
+                "row_limit": max_results,
+            },
+        )
+        if result.get("is_error"):
+            text = self._first_text(result)
+            raise SplunkMCPClientError(
+                f"splunk_run_query failed: {text[:300] or 'unknown error'}"
+            )
+        return self._extract_rows(result)
+
+    @staticmethod
+    def _first_text(result: dict[str, Any]) -> str:
+        for block in result.get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "text":
+                return block.get("text") or ""
+        return ""
+
+    @classmethod
+    def _extract_rows(cls, result: dict[str, Any]) -> list[dict[str, Any]]:
+        structured = result.get("structured_content")
+        if isinstance(structured, dict) and isinstance(structured.get("results"), list):
+            return [row for row in structured["results"] if isinstance(row, dict)]
+        # Fallback: parse the JSON text block.
+        text = cls._first_text(result)
+        if text:
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict) and isinstance(data.get("results"), list):
+                return [row for row in data["results"] if isinstance(row, dict)]
+        return []
+
     # ------------------------------------------------------------------
     # Async implementation
     # ------------------------------------------------------------------

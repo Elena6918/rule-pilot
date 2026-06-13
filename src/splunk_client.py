@@ -62,6 +62,27 @@ def _env_bool(name: str, default: bool) -> bool:
     )
 
 
+def _build_mcp_client_if_configured() -> Any:
+    """Build a SplunkMCPClient when MCP env vars are present, else None.
+
+    Construction does not open a connection (it just stores endpoint + token),
+    so this is cheap and safe; an unreachable server surfaces only when a search
+    actually runs, where run_search falls back to REST.
+    """
+    endpoint = (os.getenv("SPLUNK_MCP_ENDPOINT") or "").strip()
+    token = (os.getenv("SPLUNK_MCP_TOKEN") or "").strip()
+    if not endpoint or not token:
+        return None
+    try:
+        try:
+            from src.splunk_mcp_client import SplunkMCPClient
+        except ModuleNotFoundError:
+            from splunk_mcp_client import SplunkMCPClient
+        return SplunkMCPClient.from_env()
+    except Exception:
+        return None
+
+
 def _required_env(name: str) -> str:
     value = os.getenv(name)
     if value is None or value.strip() == "":
@@ -82,6 +103,9 @@ class SplunkClient:
     poll_interval: float = 0.5
     max_wait_seconds: int = 60
     _last_spl: str = ""
+    # When set, search execution is routed through the Splunk MCP Server's
+    # splunk_run_query tool (REST stays as the fallback + parser pre-flight).
+    mcp_client: Any = None
 
     @classmethod
     def from_env(cls) -> "SplunkClient":
@@ -109,6 +133,7 @@ class SplunkClient:
             password=password,
             index=index,
             verify_ssl=verify_ssl,
+            mcp_client=_build_mcp_client_if_configured(),
         )
 
     @property
@@ -230,6 +255,21 @@ class SplunkClient:
 
         spl = self._normalize_search_spl(spl)
         object.__setattr__(self, "_last_spl", spl)
+
+        # Default search path: the Splunk MCP Server (a listed Splunk AI
+        # capability). REST is the fallback so a transient MCP error never fails
+        # the run.
+        if self.mcp_client is not None:
+            try:
+                return self.mcp_client.run_query(
+                    spl,
+                    earliest_time=earliest_time,
+                    latest_time=latest_time,
+                    max_results=max_results,
+                )
+            except Exception:
+                pass
+
         sid = self._create_search_job(
             spl=spl,
             earliest_time=earliest_time,

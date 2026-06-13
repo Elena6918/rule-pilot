@@ -10,14 +10,17 @@ source of ground truth.
 
 - **Track:** Security (detection engineering / SOC alert-fatigue reduction)
 - **Interfaces:** Streamlit UI (`app.py`) and CLI (`run_demo.py`)
-- **Splunk surface:** Splunk Enterprise REST + Splunk MCP Server (Splunkbase #7931)
+- **Splunk AI capability used at runtime:** the **Splunk MCP Server**
+  (Splunkbase #7931) — every Splunk search runs through it. The **Splunk AI
+  Assistant** is also integrated as a model provider (pending tenant
+  entitlement).
 
 ### What this diagram shows (maps to the submission requirements)
 
 | Requirement | Where |
 |---|---|
-| **How the app interacts with Splunk** | §1 (Splunk access layer), §4 (integration points table) — REST search jobs + parser pre-flight, and the MCP Server |
-| **How AI models / agents are integrated** | §1 (model-provider block), §2 (natural-language → SPL compiler), §5 (provider-agnostic `ModelClient`) |
+| **How the app interacts with Splunk** | §1 (Splunk access layer) + §4 (integration table): all searches run through the **Splunk MCP Server** (`splunk_run_query`); REST handles parser pre-flight + fallback |
+| **How AI models / agents are integrated** | §1 (model-provider block), §2 (natural-language → SPL compiler), §5 (provider-agnostic `ModelClient`, incl. the Splunk AI Assistant) |
 | **Data flow between services, APIs, and components** | §1 (component graph) and §3 (the agentic refine → verify → revise loop) |
 
 ---
@@ -49,8 +52,8 @@ flowchart TB
     end
 
     subgraph SPLUNK_IO["Splunk access layer"]
-        REST["SplunkClient - splunk_client.py<br/>REST: search jobs + parser pre-flight"]
-        MCP["SplunkMCPClient - splunk_mcp_client.py<br/>official mcp SDK, encrypted token"]
+        MCP["SplunkMCPClient - splunk_mcp_client.py<br/>splunk_run_query — DEFAULT search path<br/>official mcp SDK, encrypted token"]
+        REST["SplunkClient - splunk_client.py<br/>parser pre-flight + search fallback"]
     end
 
     subgraph EXT["External systems"]
@@ -70,11 +73,12 @@ flowchart TB
     OAI --> OLLAMA
     OAI --> OPENAI
     SAIA --> MCP
-    AGENT --> REST
-    COMPILE --> REST
+    AGENT -->|"all searches"| MCP
+    AGENT -->|"parser + fallback"| REST
+    COMPILE -->|"parser pre-flight"| REST
 
-    REST --> SPL
     MCP --> SPL
+    REST --> SPL
     SPL -. "saia_* tools" .-> SCS
 
     REP --> ST
@@ -85,10 +89,17 @@ flowchart TB
     class SAIA,SCS pending;
 ```
 
+**Splunk MCP Server is the default data path:** every search RulePilot runs —
+baseline, diagnostics, candidates, and the preservation checks — goes through the
+**Splunk MCP Server** (`splunk_run_query`), one of the hackathon's listed Splunk
+AI capabilities. The REST client handles SPL parser pre-flight (there is no
+parser tool in MCP) and serves as a search fallback if MCP is briefly
+unreachable, so a run never fails.
+
 **Legend:** green = working in the demo today; amber = wired and demonstrable
 (the MCP tool list includes `saia_*`) but blocked on a Splunk-cloud-side
-`saia-api-v2` entitlement for the tenant. Because the model layer is the
-`ModelClient` protocol, the provider is a runtime choice — the analyst selects
+`saia-api-v2` entitlement for the tenant. The model layer is the `ModelClient`
+protocol, so the provider is a runtime choice — the analyst selects
 **Local (Qwen)**, **Frontier (OpenAI)**, or **Splunk AI Assistant** in the UI,
 and the same code path uses whichever is chosen.
 
@@ -164,9 +175,9 @@ flowchart TD
 
 | Capability | Mechanism | Endpoint / tool |
 |---|---|---|
-| Run baseline, diagnostic, candidate, and oracle searches | REST search jobs | `POST /services/search/jobs` → poll → `/results` |
+| **Run every search** (baseline, diagnostics, candidates, preservation checks) — the default data path | **Splunk MCP Server** | `splunk_run_query` tool over `/services/mcp` (official `mcp` SDK, encrypted token) |
 | **SPL grammar pre-flight** (reject bad SPL before dispatch; feed Splunk's own error back to the model) | REST parser | `POST /services/search/parser?parse_only=true` |
-| MCP connectivity + tool discovery | Splunk MCP Server | `/services/mcp` (official `mcp` SDK, encrypted bearer token) |
+| Search fallback if MCP is briefly unreachable | REST search jobs | `POST /services/search/jobs` → poll → `/results` |
 | AI Assistant as a model provider | MCP `saia_*` tools | `saia_generate_spl` (→ `saia-api-v2`, pending entitlement) |
 
 ---
